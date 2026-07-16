@@ -84,7 +84,7 @@ fn calculateScoresParallel(
     errdefer allocator.free(rows);
     const workers = parallel.workerCount(crops.len);
     if (workers == 0) return rows;
-    var threads = try allocator.alloc(std.Thread, workers);
+    const threads = try allocator.alloc(std.Thread, workers);
     defer allocator.free(threads);
     for (threads, 0..) |*thread, worker_index| {
         thread.* = try std.Thread.spawn(.{}, calculateScoreChunk, .{

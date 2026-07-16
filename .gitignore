@@ -1,6 +1,7 @@
 .zig-cache/
 zig-out/
 dst/
+examples/agcaad_historical_weather_1981_2010/output/
 
 *.pdb
 *.exe

@@ -86,7 +86,7 @@ fn accumulateGrowingSeasonParallel(
     for (worker_maps) |*worker_map| worker_map.* = std.AutoHashMap(u64, Accumulator).init(allocator);
     errdefer for (worker_maps) |*worker_map| worker_map.deinit();
 
-    var threads = try allocator.alloc(std.Thread, workers);
+    const threads = try allocator.alloc(std.Thread, workers);
     defer allocator.free(threads);
     for (threads, 0..) |*thread, worker_index| {
         thread.* = try std.Thread.spawn(.{}, accumulateGrowingSeasonChunk, .{
