@@ -17,37 +17,47 @@ This repository contains a modernized AgCAAD command line model implemented in Z
 - Modular soil, climate, and final-rating stages.
 - Parallel crop-by-township climate scoring using available CPU threads.
 
-## Requirements
+## Download
 
-- Zig `0.16.0`
-- Windows PowerShell for the examples below
+Prebuilt binaries are available from the [`v1.0.0` release](https://github.com/4SAnalyticsnModelling/agcaad/releases/tag/v1.0.0).
 
-## Build
+Choose the archive for your operating system and CPU:
 
-```powershell
-zig build
-```
+| Operating system | CPU | Download |
+| --- | --- | --- |
+| Windows | Intel/AMD 64-bit | [`x86_64-windows.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.0.0/x86_64-windows.zip) |
+| Windows | ARM64 | [`aarch64-windows.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.0.0/aarch64-windows.zip) |
+| Linux | Intel/AMD 64-bit | [`x86_64-linux.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.0.0/x86_64-linux.zip) |
+| Linux | ARM64 | [`aarch64-linux.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.0.0/aarch64-linux.zip) |
+| macOS | Intel 64-bit | [`x86_64-macos.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.0.0/x86_64-macos.zip) |
+| macOS | Apple Silicon | [`aarch64-macos.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.0.0/aarch64-macos.zip) |
 
-Run tests:
+## Run With A Binary
 
-```powershell
-zig build test
-```
-
-## Run
-
-The full model reads all required flat input files from a user-defined input folder and writes only the final ratings file to a user-defined output folder.
+Download and extract the archive for your system. The full model reads all required flat input files from a user-defined input folder and writes only the final ratings file to a user-defined output folder.
 Create the output folder before running, then pass that folder as `<output-root>`.
+
+Windows PowerShell:
+
+```powershell
+Expand-Archive .\x86_64-windows.zip -DestinationPath .\agcaad
+New-Item -ItemType Directory -Force .\output
+.\agcaad\bin\agcaad.exe run <input-root> .\output
+```
+
+Linux/macOS shell:
+
+```sh
+unzip x86_64-linux.zip -d agcaad
+mkdir -p output
+./agcaad/bin/agcaad run <input-root> ./output
+```
+
+Windows example using this repository's included example input:
 
 ```powershell
 New-Item -ItemType Directory -Force ".\examples\agcaad_historical_weather_1981_2010\output"
-zig build run -- run <input-root> <output-root>
-```
-
-Example:
-
-```powershell
-zig build run -- run `
+.\agcaad\bin\agcaad.exe run `
   ".\examples\agcaad_historical_weather_1981_2010\input" `
   ".\examples\agcaad_historical_weather_1981_2010\output"
 ```
@@ -130,15 +140,17 @@ The full `run` command computes all component scores in memory and writes only t
 Standalone stage commands are available for validation and debugging. These commands write their own tab-delimited stage output files.
 
 ```powershell
-zig build run -- texture <input-root> <output-root>
-zig build run -- ph <input-root> <output-root>
-zig build run -- drainage <input-root> <output-root>
-zig build run -- precip-score <input-root> <output-root>
-zig build run -- winter-cold <input-root> <output-root>
-zig build run -- growing-season <input-root> <output-root>
-zig build run -- temp-score <input-root> <output-root>
-zig build run -- final <input-root> <output-root>
+.\agcaad\bin\agcaad.exe texture <input-root> <output-root>
+.\agcaad\bin\agcaad.exe ph <input-root> <output-root>
+.\agcaad\bin\agcaad.exe drainage <input-root> <output-root>
+.\agcaad\bin\agcaad.exe precip-score <input-root> <output-root>
+.\agcaad\bin\agcaad.exe winter-cold <input-root> <output-root>
+.\agcaad\bin\agcaad.exe growing-season <input-root> <output-root>
+.\agcaad\bin\agcaad.exe temp-score <input-root> <output-root>
+.\agcaad\bin\agcaad.exe final <input-root> <output-root>
 ```
+
+On Linux and macOS, use `./agcaad/bin/agcaad` instead of `.\agcaad\bin\agcaad.exe`.
 
 ## Repository Layout
 
@@ -164,6 +176,26 @@ src/
     winter_cold.zig
   suitability/
     final_rating.zig
+```
+
+## Build From Source
+
+Source builds require Zig `0.16.0`.
+
+```powershell
+zig build
+```
+
+Run tests:
+
+```powershell
+zig build test
+```
+
+Run from source:
+
+```powershell
+zig build run -- run <input-root> <output-root>
 ```
 
 ## Notes
