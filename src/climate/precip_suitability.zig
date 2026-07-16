@@ -1,5 +1,6 @@
 const std = @import("std");
 const array_store = @import("../core/array_store.zig");
+const parallel = @import("../core/parallel.zig");
 const reader_mod = @import("../io/delimited_reader.zig");
 const writer_mod = @import("../io/tab_writer.zig");
 const paths_mod = @import("../paths.zig");
@@ -32,22 +33,13 @@ pub fn runWithPaths(allocator: std.mem.Allocator, io: std.Io, precip_path: []con
     defer allocator.free(precip);
     const crops = try loadCrops(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
-    var rows: std.ArrayList(Result) = .empty;
-    defer rows.deinit(allocator);
-    for (crops) |crop| {
-        for (precip) |township| {
-            try rows.append(allocator, .{
-                .crop_name_id = crop.crop_name_id,
-                .township_id = township.township_id,
-                .score = precipitationSuitabilityScore(township.precipitation, crop.minimum, crop.maximum),
-            });
-        }
-    }
-    std.mem.sort(Result, rows.items, {}, sortRows);
+    const rows = try calculateScoresParallel(allocator, crops, precip);
+    defer allocator.free(rows);
+    std.mem.sort(Result, rows, {}, sortRows);
     var output = writer_mod.Writer.create(allocator, io, output_path);
     defer output.close();
     try output.writeAll("crop_common_name\ttownship_id\tprecipitation_suitability_score\n");
-    for (rows.items) |row| try output.print("{s}\t{s}\t{d}\n", .{ strings.get(row.crop_name_id), strings.get(row.township_id), row.score });
+    for (rows) |row| try output.print("{s}\t{s}\t{d}\n", .{ strings.get(row.crop_name_id), strings.get(row.township_id), row.score });
     try output.flush();
 }
 
@@ -69,14 +61,53 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     const crops = try loadCrops(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
 
-    for (crops) |crop| {
-        for (precip) |township| {
-            try final_scores.addScore(
-                strings.get(crop.crop_name_id),
-                strings.get(township.township_id),
-                .precip,
-                @floatFromInt(precipitationSuitabilityScore(township.precipitation, crop.minimum, crop.maximum)),
-            );
+    const rows = try calculateScoresParallel(allocator, crops, precip);
+    defer allocator.free(rows);
+    for (rows) |row| {
+        try final_scores.addScore(
+            strings.get(row.crop_name_id),
+            strings.get(row.township_id),
+            .precip,
+            @floatFromInt(row.score),
+        );
+    }
+}
+
+fn calculateScoresParallel(allocator: std.mem.Allocator, crops: []const CropPrecipitation, precip: []const TownshipPrecipitation) ![]Result {
+    const total_count = crops.len * precip.len;
+    const rows = try allocator.alloc(Result, total_count);
+    errdefer allocator.free(rows);
+    const workers = parallel.workerCount(crops.len);
+    if (workers == 0) return rows;
+    var threads = try allocator.alloc(std.Thread, workers);
+    defer allocator.free(threads);
+    for (threads, 0..) |*thread, worker_index| {
+        thread.* = try std.Thread.spawn(.{}, calculateScoreChunk, .{
+            crops,
+            precip,
+            rows,
+            parallel.chunkStart(crops.len, worker_index, workers),
+            parallel.chunkEnd(crops.len, worker_index, workers),
+        });
+    }
+    for (threads) |thread| thread.join();
+    return rows;
+}
+
+fn calculateScoreChunk(
+    crops: []const CropPrecipitation,
+    precip: []const TownshipPrecipitation,
+    rows: []Result,
+    crop_start: usize,
+    crop_end: usize,
+) void {
+    for (crops[crop_start..crop_end], crop_start..) |crop, crop_index| {
+        for (precip, 0..) |township, township_index| {
+            rows[crop_index * precip.len + township_index] = .{
+                .crop_name_id = crop.crop_name_id,
+                .township_id = township.township_id,
+                .score = precipitationSuitabilityScore(township.precipitation, crop.minimum, crop.maximum),
+            };
         }
     }
 }

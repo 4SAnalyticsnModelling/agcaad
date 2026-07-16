@@ -36,8 +36,10 @@ zig build test
 ## Run
 
 The full model reads all required flat input files from a user-defined input folder and writes only the final ratings file to a user-defined output folder.
+Create the output folder before running, then pass that folder as `<output-root>`.
 
 ```powershell
+New-Item -ItemType Directory -Force ".\examples\agcaad_historical_weather_1981_2010\output"
 zig build run -- run <input-root> <output-root>
 ```
 
@@ -73,8 +75,6 @@ examples/
       soil_texture_requirement_scores.txt
       temperature_suitability_days_for_non_winter_crops.txt
       temperature_suitability_days_for_winter_crops.txt
-    output/
-      crop_suitability_rankings_and_overall_ratings.txt
 ```
 
 Input folders should contain only the input `.txt` files. Nested input folders are not used.

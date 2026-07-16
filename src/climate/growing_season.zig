@@ -1,5 +1,6 @@
 const std = @import("std");
 const array_store = @import("../core/array_store.zig");
+const parallel = @import("../core/parallel.zig");
 const packed_key = @import("../core/packed_key.zig");
 const reader_mod = @import("../io/delimited_reader.zig");
 const writer_mod = @import("../io/tab_writer.zig");
@@ -34,21 +35,8 @@ pub fn runWithPaths(allocator: std.mem.Allocator, io: std.Io, normals_path: []co
     defer allocator.free(normals);
     const crops = try loadCrops(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
-    var accumulators = std.AutoHashMap(u64, Accumulator).init(allocator);
+    var accumulators = try accumulateGrowingSeasonParallel(allocator, strings, normals, crops);
     defer accumulators.deinit();
-    for (normals) |normal| {
-        for (crops) |crop| {
-            const key = packed_key.pack(crop.crop_name_id, normal.township_id);
-            const entry = try accumulators.getOrPut(key);
-            if (!entry.found_existing) entry.value_ptr.* = .{};
-            const is_winter_annual = std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual");
-            const initial_flag = is_winter_annual or (normal.max_temperature_quantile_75 > @as(f32, @floatFromInt(crop.absolute_minimum_temperature)) and normal.min_temperature_quantile_25 > 0);
-            if (initial_flag) entry.value_ptr.previous_positive_flag_seen = true;
-            if (entry.value_ptr.previous_positive_flag_seen and normal.min_temperature_quantile_25 > 0) {
-                entry.value_ptr.growing_season_days += 1;
-            }
-        }
-    }
     try writeScores(allocator, io, strings, crops, accumulators, output_path);
 }
 
@@ -70,10 +58,66 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     const crops = try loadCrops(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
 
-    var accumulators = std.AutoHashMap(u64, Accumulator).init(allocator);
+    var accumulators = try accumulateGrowingSeasonParallel(allocator, strings, normals, crops);
     defer accumulators.deinit();
+
+    var it = accumulators.iterator();
+    while (it.next()) |entry| {
+        const ids = packed_key.unpack(entry.key_ptr.*);
+        const crop = findCrop(crops, ids.first) orelse return error.MissingCrop;
+        const score = if (std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual")) 4 else growingSeasonScore(entry.value_ptr.growing_season_days, crop.grow_day_minimum, crop.grow_day_range);
+        try final_scores.addScore(strings.get(ids.first), strings.get(ids.second), .growing_season, @floatFromInt(score));
+    }
+}
+
+fn accumulateGrowingSeasonParallel(
+    allocator: std.mem.Allocator,
+    strings: array_store.StringInterner,
+    normals: []const DailyNormal,
+    crops: []const Crop,
+) !std.AutoHashMap(u64, Accumulator) {
+    const workers = parallel.workerCount(crops.len);
+    var accumulators = std.AutoHashMap(u64, Accumulator).init(allocator);
+    errdefer accumulators.deinit();
+    if (workers == 0) return accumulators;
+
+    var worker_maps = try allocator.alloc(std.AutoHashMap(u64, Accumulator), workers);
+    defer allocator.free(worker_maps);
+    for (worker_maps) |*worker_map| worker_map.* = std.AutoHashMap(u64, Accumulator).init(allocator);
+    errdefer for (worker_maps) |*worker_map| worker_map.deinit();
+
+    var threads = try allocator.alloc(std.Thread, workers);
+    defer allocator.free(threads);
+    for (threads, 0..) |*thread, worker_index| {
+        thread.* = try std.Thread.spawn(.{}, accumulateGrowingSeasonChunk, .{
+            strings,
+            normals,
+            crops,
+            parallel.chunkStart(crops.len, worker_index, workers),
+            parallel.chunkEnd(crops.len, worker_index, workers),
+            &worker_maps[worker_index],
+        });
+    }
+    for (threads) |thread| thread.join();
+
+    for (worker_maps) |*worker_map| {
+        defer worker_map.deinit();
+        var it = worker_map.iterator();
+        while (it.next()) |entry| try accumulators.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
+    return accumulators;
+}
+
+fn accumulateGrowingSeasonChunk(
+    strings: array_store.StringInterner,
+    normals: []const DailyNormal,
+    crops: []const Crop,
+    crop_start: usize,
+    crop_end: usize,
+    accumulators: *std.AutoHashMap(u64, Accumulator),
+) !void {
     for (normals) |normal| {
-        for (crops) |crop| {
+        for (crops[crop_start..crop_end]) |crop| {
             const key = packed_key.pack(crop.crop_name_id, normal.township_id);
             const entry = try accumulators.getOrPut(key);
             if (!entry.found_existing) entry.value_ptr.* = .{};
@@ -84,14 +128,6 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
                 entry.value_ptr.growing_season_days += 1;
             }
         }
-    }
-
-    var it = accumulators.iterator();
-    while (it.next()) |entry| {
-        const ids = packed_key.unpack(entry.key_ptr.*);
-        const crop = findCrop(crops, ids.first) orelse return error.MissingCrop;
-        const score = if (std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual")) 4 else growingSeasonScore(entry.value_ptr.growing_season_days, crop.grow_day_minimum, crop.grow_day_range);
-        try final_scores.addScore(strings.get(ids.first), strings.get(ids.second), .growing_season, @floatFromInt(score));
     }
 }
 
@@ -171,7 +207,9 @@ fn findCrop(crops: []const Crop, crop_name_id: u32) ?Crop {
     for (crops) |crop| if (crop.crop_name_id == crop_name_id) return crop;
     return null;
 }
-fn sortRows(_: void, a: Result, b: Result) bool { return if (a.crop_name_id == b.crop_name_id) a.township_id < b.township_id else a.crop_name_id < b.crop_name_id; }
+fn sortRows(_: void, a: Result, b: Result) bool {
+    return if (a.crop_name_id == b.crop_name_id) a.township_id < b.township_id else a.crop_name_id < b.crop_name_id;
+}
 fn sortNormals(_: void, a: DailyNormal, b: DailyNormal) bool {
     if (a.township_id == b.township_id) return a.julian_day < b.julian_day;
     return a.township_id < b.township_id;
