@@ -1,7 +1,6 @@
 const std = @import("std");
 const array_store = @import("../core/array_store.zig");
 const parallel = @import("../core/parallel.zig");
-const packed_key = @import("../core/packed_key.zig");
 const reader_mod = @import("../io/delimited_reader.zig");
 const writer_mod = @import("../io/tab_writer.zig");
 const paths_mod = @import("../paths.zig");
@@ -36,9 +35,9 @@ pub fn runWithPaths(allocator: std.mem.Allocator, io: std.Io, normals_path: []co
     defer allocator.free(normals);
     const crops = try loadCrops(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
-    var accumulators = try accumulateGrowingSeasonParallel(allocator, strings, normals, crops);
-    defer accumulators.deinit();
-    try writeScores(allocator, io, strings, crops, accumulators, output_path);
+    const rows = try calculateScoresParallel(allocator, strings, normals, crops);
+    defer allocator.free(rows);
+    try writeScores(allocator, io, strings, rows, output_path);
 }
 
 pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_root_path: []const u8, final_scores: *final_rating.Accumulator) !void {
@@ -59,84 +58,73 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     const crops = try loadCrops(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
 
-    var accumulators = try accumulateGrowingSeasonParallel(allocator, strings, normals, crops);
-    defer accumulators.deinit();
-
-    var it = accumulators.iterator();
-    while (it.next()) |entry| {
-        const ids = packed_key.unpack(entry.key_ptr.*);
-        const crop = findCrop(crops, ids.first) orelse return error.MissingCrop;
-        const score = if (std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual")) 4 else growingSeasonScore(entry.value_ptr.growing_season_days, crop.grow_day_minimum, crop.grow_day_range);
-        try final_scores.addScore(strings.get(ids.first), strings.get(ids.second), .growing_season, @floatFromInt(score));
+    const rows = try calculateScoresParallel(allocator, strings, normals, crops);
+    defer allocator.free(rows);
+    for (rows) |row| {
+        try final_scores.addScore(strings.get(row.crop_name_id), strings.get(row.township_id), .growing_season, @floatFromInt(row.score));
     }
 }
 
-fn accumulateGrowingSeasonParallel(
+fn calculateScoresParallel(
     allocator: std.mem.Allocator,
     strings: array_store.StringInterner,
     normals: []const DailyNormal,
     crops: []const Crop,
-) !std.AutoHashMap(u64, Accumulator) {
+) ![]Result {
     const township_ranges = try buildTownshipRanges(allocator, normals);
     defer allocator.free(township_ranges);
     const total_jobs = crops.len * township_ranges.len;
+    const rows = try allocator.alloc(Result, total_jobs);
+    errdefer allocator.free(rows);
     const workers = parallel.workerCount(total_jobs);
-    var accumulators = std.AutoHashMap(u64, Accumulator).init(allocator);
-    errdefer accumulators.deinit();
-    if (workers == 0) return accumulators;
-
-    var worker_maps = try allocator.alloc(std.AutoHashMap(u64, Accumulator), workers);
-    defer allocator.free(worker_maps);
-    for (worker_maps) |*worker_map| worker_map.* = std.AutoHashMap(u64, Accumulator).init(allocator);
-    errdefer for (worker_maps) |*worker_map| worker_map.deinit();
+    if (workers == 0) return rows;
 
     const threads = try allocator.alloc(std.Thread, workers);
     defer allocator.free(threads);
     for (threads, 0..) |*thread, worker_index| {
-        thread.* = try std.Thread.spawn(.{}, accumulateGrowingSeasonChunk, .{
+        thread.* = try std.Thread.spawn(.{}, calculateScoreChunk, .{
             strings,
             normals,
             township_ranges,
             crops,
+            rows,
             parallel.chunkStart(total_jobs, worker_index, workers),
             parallel.chunkEnd(total_jobs, worker_index, workers),
-            &worker_maps[worker_index],
         });
     }
     for (threads) |thread| thread.join();
-
-    for (worker_maps) |*worker_map| {
-        defer worker_map.deinit();
-        var it = worker_map.iterator();
-        while (it.next()) |entry| try accumulators.put(entry.key_ptr.*, entry.value_ptr.*);
-    }
-    return accumulators;
+    return rows;
 }
 
-fn accumulateGrowingSeasonChunk(
+fn calculateScoreChunk(
     strings: array_store.StringInterner,
     normals: []const DailyNormal,
     township_ranges: []const TownshipNormalRange,
     crops: []const Crop,
+    rows: []Result,
     job_start: usize,
     job_end: usize,
-    accumulators: *std.AutoHashMap(u64, Accumulator),
-) !void {
+) void {
     for (job_start..job_end) |job_index| {
         const crop = crops[job_index / township_ranges.len];
         const township_range = township_ranges[job_index % township_ranges.len];
-        const key = packed_key.pack(crop.crop_name_id, township_range.township_id);
-        const entry = try accumulators.getOrPut(key);
-        if (!entry.found_existing) entry.value_ptr.* = .{};
+        var accumulator: Accumulator = .{};
 
         for (normals[township_range.start..township_range.end]) |normal| {
             const is_winter_annual = std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual");
             const initial_flag = is_winter_annual or (normal.max_temperature_quantile_75 > @as(f32, @floatFromInt(crop.absolute_minimum_temperature)) and normal.min_temperature_quantile_25 > 0);
-            if (initial_flag) entry.value_ptr.previous_positive_flag_seen = true;
-            if (entry.value_ptr.previous_positive_flag_seen and normal.min_temperature_quantile_25 > 0) {
-                entry.value_ptr.growing_season_days += 1;
+            if (initial_flag) accumulator.previous_positive_flag_seen = true;
+            if (accumulator.previous_positive_flag_seen and normal.min_temperature_quantile_25 > 0) {
+                accumulator.growing_season_days += 1;
             }
         }
+
+        const score = if (std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual")) 4 else growingSeasonScore(accumulator.growing_season_days, crop.grow_day_minimum, crop.grow_day_range);
+        rows[job_index] = .{
+            .crop_name_id = crop.crop_name_id,
+            .township_id = township_range.township_id,
+            .score = score,
+        };
     }
 }
 
@@ -197,21 +185,12 @@ fn loadCrops(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
     return rows.toOwnedSlice(allocator);
 }
 
-fn writeScores(allocator: std.mem.Allocator, io: std.Io, strings: array_store.StringInterner, crops: []const Crop, accumulators: std.AutoHashMap(u64, Accumulator), output_path: []const u8) !void {
-    var rows: std.ArrayList(Result) = .empty;
-    defer rows.deinit(allocator);
-    var it = accumulators.iterator();
-    while (it.next()) |entry| {
-        const ids = packed_key.unpack(entry.key_ptr.*);
-        const crop = findCrop(crops, ids.first) orelse return error.MissingCrop;
-        const score = if (std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual")) 4 else growingSeasonScore(entry.value_ptr.growing_season_days, crop.grow_day_minimum, crop.grow_day_range);
-        try rows.append(allocator, .{ .crop_name_id = ids.first, .township_id = ids.second, .score = score });
-    }
-    std.mem.sort(Result, rows.items, {}, sortRows);
+fn writeScores(allocator: std.mem.Allocator, io: std.Io, strings: array_store.StringInterner, rows: []Result, output_path: []const u8) !void {
+    std.mem.sort(Result, rows, {}, sortRows);
     var output = writer_mod.Writer.create(allocator, io, output_path);
     defer output.close();
     try output.writeAll("crop_common_name\ttownship_id\tgrowing_season_suitability_score\n");
-    for (rows.items) |row| try output.print("{s}\t{s}\t{d}\n", .{ strings.get(row.crop_name_id), strings.get(row.township_id), row.score });
+    for (rows) |row| try output.print("{s}\t{s}\t{d}\n", .{ strings.get(row.crop_name_id), strings.get(row.township_id), row.score });
     try output.flush();
 }
 
@@ -226,10 +205,6 @@ fn growingSeasonScore(days: i32, minimum: i32, range: i32) i32 {
     return 4;
 }
 
-fn findCrop(crops: []const Crop, crop_name_id: u32) ?Crop {
-    for (crops) |crop| if (crop.crop_name_id == crop_name_id) return crop;
-    return null;
-}
 fn sortRows(_: void, a: Result, b: Result) bool {
     return if (a.crop_name_id == b.crop_name_id) a.township_id < b.township_id else a.crop_name_id < b.crop_name_id;
 }

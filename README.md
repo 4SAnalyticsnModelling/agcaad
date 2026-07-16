@@ -15,6 +15,7 @@ This repository contains a modernized AgCAAD command line model implemented in Z
 - Explicit `snake_case` input and output column names.
 - Suitability limitation notes based on component scores.
 - Modular soil, climate, and final-rating stages.
+- Parallel crop-by-township climate scoring using available CPU threads.
 
 ## Requirements
 
@@ -170,4 +171,4 @@ src/
 - The model uses prepared annual precipitation normals as an input file; it does not generate precipitation normals.
 - The full run does not write intermediate suitability files.
 - Numeric rounding uses Zig's default `@round` behavior.
-- The current implementation is structured for future threaded partitioning by township, crop, or row ranges.
+- Climate suitability stages split crop-by-township calculations across available CPU threads.
