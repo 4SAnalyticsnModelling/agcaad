@@ -77,7 +77,7 @@ fn calculateScoresParallel(allocator: std.mem.Allocator, crops: []const CropPrec
     const total_count = crops.len * precip.len;
     const rows = try allocator.alloc(Result, total_count);
     errdefer allocator.free(rows);
-    const workers = parallel.workerCount(crops.len);
+    const workers = parallel.workerCount(total_count);
     if (workers == 0) return rows;
     const threads = try allocator.alloc(std.Thread, workers);
     defer allocator.free(threads);
@@ -86,8 +86,8 @@ fn calculateScoresParallel(allocator: std.mem.Allocator, crops: []const CropPrec
             crops,
             precip,
             rows,
-            parallel.chunkStart(crops.len, worker_index, workers),
-            parallel.chunkEnd(crops.len, worker_index, workers),
+            parallel.chunkStart(total_count, worker_index, workers),
+            parallel.chunkEnd(total_count, worker_index, workers),
         });
     }
     for (threads) |thread| thread.join();
@@ -98,17 +98,17 @@ fn calculateScoreChunk(
     crops: []const CropPrecipitation,
     precip: []const TownshipPrecipitation,
     rows: []Result,
-    crop_start: usize,
-    crop_end: usize,
+    job_start: usize,
+    job_end: usize,
 ) void {
-    for (crops[crop_start..crop_end], crop_start..) |crop, crop_index| {
-        for (precip, 0..) |township, township_index| {
-            rows[crop_index * precip.len + township_index] = .{
-                .crop_name_id = crop.crop_name_id,
-                .township_id = township.township_id,
-                .score = precipitationSuitabilityScore(township.precipitation, crop.minimum, crop.maximum),
-            };
-        }
+    for (job_start..job_end) |job_index| {
+        const crop = crops[job_index / precip.len];
+        const township = precip[job_index % precip.len];
+        rows[job_index] = .{
+            .crop_name_id = crop.crop_name_id,
+            .township_id = township.township_id,
+            .score = precipitationSuitabilityScore(township.precipitation, crop.minimum, crop.maximum),
+        };
     }
 }
 

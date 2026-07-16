@@ -8,6 +8,7 @@ const paths_mod = @import("../paths.zig");
 const final_rating = @import("../suitability/final_rating.zig");
 
 const DailyNormal = struct { township_id: u32, julian_day: i32, max_temperature_quantile_75: f32, min_temperature_quantile_25: f32 };
+const TownshipNormalRange = struct { township_id: u32, start: usize, end: usize };
 const Crop = struct { crop_name_id: u32, growth_habit_id: u32, absolute_minimum_temperature: i32, grow_day_minimum: i32, grow_day_range: i32 };
 const Accumulator = struct { previous_positive_flag_seen: bool = false, growing_season_days: i32 = 0 };
 const Result = struct { crop_name_id: u32, township_id: u32, score: i32 };
@@ -76,7 +77,10 @@ fn accumulateGrowingSeasonParallel(
     normals: []const DailyNormal,
     crops: []const Crop,
 ) !std.AutoHashMap(u64, Accumulator) {
-    const workers = parallel.workerCount(crops.len);
+    const township_ranges = try buildTownshipRanges(allocator, normals);
+    defer allocator.free(township_ranges);
+    const total_jobs = crops.len * township_ranges.len;
+    const workers = parallel.workerCount(total_jobs);
     var accumulators = std.AutoHashMap(u64, Accumulator).init(allocator);
     errdefer accumulators.deinit();
     if (workers == 0) return accumulators;
@@ -92,9 +96,10 @@ fn accumulateGrowingSeasonParallel(
         thread.* = try std.Thread.spawn(.{}, accumulateGrowingSeasonChunk, .{
             strings,
             normals,
+            township_ranges,
             crops,
-            parallel.chunkStart(crops.len, worker_index, workers),
-            parallel.chunkEnd(crops.len, worker_index, workers),
+            parallel.chunkStart(total_jobs, worker_index, workers),
+            parallel.chunkEnd(total_jobs, worker_index, workers),
             &worker_maps[worker_index],
         });
     }
@@ -111,16 +116,20 @@ fn accumulateGrowingSeasonParallel(
 fn accumulateGrowingSeasonChunk(
     strings: array_store.StringInterner,
     normals: []const DailyNormal,
+    township_ranges: []const TownshipNormalRange,
     crops: []const Crop,
-    crop_start: usize,
-    crop_end: usize,
+    job_start: usize,
+    job_end: usize,
     accumulators: *std.AutoHashMap(u64, Accumulator),
 ) !void {
-    for (normals) |normal| {
-        for (crops[crop_start..crop_end]) |crop| {
-            const key = packed_key.pack(crop.crop_name_id, normal.township_id);
-            const entry = try accumulators.getOrPut(key);
-            if (!entry.found_existing) entry.value_ptr.* = .{};
+    for (job_start..job_end) |job_index| {
+        const crop = crops[job_index / township_ranges.len];
+        const township_range = township_ranges[job_index % township_ranges.len];
+        const key = packed_key.pack(crop.crop_name_id, township_range.township_id);
+        const entry = try accumulators.getOrPut(key);
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+
+        for (normals[township_range.start..township_range.end]) |normal| {
             const is_winter_annual = std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual");
             const initial_flag = is_winter_annual or (normal.max_temperature_quantile_75 > @as(f32, @floatFromInt(crop.absolute_minimum_temperature)) and normal.min_temperature_quantile_25 > 0);
             if (initial_flag) entry.value_ptr.previous_positive_flag_seen = true;
@@ -129,6 +138,20 @@ fn accumulateGrowingSeasonChunk(
             }
         }
     }
+}
+
+fn buildTownshipRanges(allocator: std.mem.Allocator, normals: []const DailyNormal) ![]TownshipNormalRange {
+    var ranges: std.ArrayList(TownshipNormalRange) = .empty;
+    errdefer ranges.deinit(allocator);
+    var start: usize = 0;
+    while (start < normals.len) {
+        const township_id = normals[start].township_id;
+        var end = start + 1;
+        while (end < normals.len and normals[end].township_id == township_id) : (end += 1) {}
+        try ranges.append(allocator, .{ .township_id = township_id, .start = start, .end = end });
+        start = end;
+    }
+    return ranges.toOwnedSlice(allocator);
 }
 
 fn loadNormals(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.StringInterner, path: []const u8) ![]DailyNormal {

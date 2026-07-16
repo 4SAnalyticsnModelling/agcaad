@@ -82,7 +82,7 @@ fn calculateScoresParallel(
     const total_count = crops.len * townships.len;
     const rows = try allocator.alloc(Result, total_count);
     errdefer allocator.free(rows);
-    const workers = parallel.workerCount(crops.len);
+    const workers = parallel.workerCount(total_count);
     if (workers == 0) return rows;
     const threads = try allocator.alloc(std.Thread, workers);
     defer allocator.free(threads);
@@ -92,8 +92,8 @@ fn calculateScoresParallel(
             crops,
             townships,
             rows,
-            parallel.chunkStart(crops.len, worker_index, workers),
-            parallel.chunkEnd(crops.len, worker_index, workers),
+            parallel.chunkStart(total_count, worker_index, workers),
+            parallel.chunkEnd(total_count, worker_index, workers),
         });
     }
     for (threads) |thread| thread.join();
@@ -105,17 +105,17 @@ fn calculateScoreChunk(
     crops: []const CropWinterTolerance,
     townships: []const TownshipWinterMinimum,
     rows: []Result,
-    crop_start: usize,
-    crop_end: usize,
+    job_start: usize,
+    job_end: usize,
 ) void {
-    for (crops[crop_start..crop_end], crop_start..) |crop, crop_index| {
-        for (townships, 0..) |township, township_index| {
-            rows[crop_index * townships.len + township_index] = .{
-                .crop_name_id = crop.crop_name_id,
-                .township_id = township.township_id,
-                .score = winterColdToleranceScore(strings.get(crop.growth_habit_id), crop.critical_minimum_winter_temperature, township.minimum_temperature_quantile_05),
-            };
-        }
+    for (job_start..job_end) |job_index| {
+        const crop = crops[job_index / townships.len];
+        const township = townships[job_index % townships.len];
+        rows[job_index] = .{
+            .crop_name_id = crop.crop_name_id,
+            .township_id = township.township_id,
+            .score = winterColdToleranceScore(strings.get(crop.growth_habit_id), crop.critical_minimum_winter_temperature, township.minimum_temperature_quantile_05),
+        };
     }
 }
 
