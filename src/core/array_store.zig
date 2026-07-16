@@ -1,0 +1,37 @@
+const std = @import("std");
+
+pub const StringInterner = struct {
+    allocator: std.mem.Allocator,
+    values: std.ArrayList([]const u8) = .empty,
+    lookup: std.StringHashMap(u32),
+
+    pub fn init(allocator: std.mem.Allocator) StringInterner {
+        return .{
+            .allocator = allocator,
+            .lookup = std.StringHashMap(u32).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *StringInterner) void {
+        for (self.values.items) |value| self.allocator.free(value);
+        self.values.deinit(self.allocator);
+        self.lookup.deinit();
+    }
+
+    pub fn intern(self: *StringInterner, value: []const u8) !u32 {
+        if (self.lookup.get(value)) |existing_id| return existing_id;
+        const owned_value = try self.allocator.dupe(u8, value);
+        const new_id: u32 = @intCast(self.values.items.len);
+        try self.values.append(self.allocator, owned_value);
+        try self.lookup.put(owned_value, new_id);
+        return new_id;
+    }
+
+    pub fn get(self: StringInterner, id: u32) []const u8 {
+        return self.values.items[id];
+    }
+};
+
+pub fn appendRuntimeValue(comptime T: type, allocator: std.mem.Allocator, values: *std.ArrayList(T), value: T) !void {
+    try values.append(allocator, value);
+}

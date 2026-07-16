@@ -1,0 +1,1 @@
+crop_common_name,township_id,julian_day
