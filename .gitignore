@@ -10,6 +10,3 @@ dst/
 
 *.tmp
 *.log
-
-examples/agcaad_historical_weather_1981_2010/input/historical_hourly_temperature_by_township_day_hour.txt
-examples/agcaad_historical_weather_1981_2010/input/temperature_suitability_days_for_non_winter_crops.txt
