@@ -1,23 +1,11 @@
+![AgCAAD](resource/agcaad.png)
+
 # AgCAAD
 
 ---
 
-![AgCAAD](resource/agcaad.png)
-
-AgCAAD is the Agriculture Crop Adaptation Atlas and Database used to rate the suitability of Alberta agricultural land for annual crop production from weather and soil information. The Phase 2 report, *Assessment of Agricultural Crop Suitability in Alberta in a Changing Climate*, describes AgCAAD as a model for evaluating crop suitability across Alberta townships using climate heat supply, moisture supply, soil physical conditions, soil chemical conditions, and drainage.
-
-This repository contains a modernized AgCAAD command line model implemented in Zig. The GIS mapping workflow is intentionally out of scope; the model computes the crop suitability mathematics and writes the final tab-delimited suitability rating table.
-
-## Features
-
-- Runtime-sized, flat 1D array data structures.
-- In-memory full-model execution with no intermediate suitability output files.
-- Comma- or tab-delimited `.txt` inputs.
-- One final tab-delimited `.txt` output file.
-- Explicit `snake_case` input and output column names.
-- Suitability limitation notes based on component scores.
-- Modular soil, climate, and final-rating stages.
-- Parallel crop-by-township climate scoring using available CPU threads.
+The Agriculture Crop Adaptation Atlas and Database (AgCAAD) is used to rate the suitability of Alberta agricultural land for annual crop production from weather and soil information. 
+The AgCAAD model evaluates crop suitability across Alberta townships using climate heat supply, moisture supply, soil physical conditions, soil chemical conditions, and drainage.
 
 ## Download
 
@@ -42,17 +30,14 @@ Create the output folder before running, then pass that folder as `<output-root>
 Windows PowerShell:
 
 ```powershell
-Expand-Archive .\x86_64-windows.zip -DestinationPath .\agcaad
-New-Item -ItemType Directory -Force .\output
-.\agcaad\bin\agcaad.exe run <input-root> .\output
+.\agcaad.exe run <input-root> <output-root>
 ```
 
 Linux/macOS shell:
 
 ```sh
-unzip x86_64-linux.zip -d agcaad
-mkdir -p output
-./agcaad/bin/agcaad run <input-root> ./output
+chmod 'u+x' agcaad
+./agcaad run <input-root> <output-root>
 ```
 
 Windows example using this repository's included example input:
