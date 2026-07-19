@@ -3,8 +3,8 @@
 # AgCAAD
 
 
-The Agriculture Crop Adaptation Atlas and Database (AgCAAD) is used to rate the suitability of Alberta agricultural land for annual crop production from weather and soil information. 
-The AgCAAD model evaluates crop suitability across Alberta townships using climate heat supply, moisture supply, soil physical conditions, soil chemical conditions, and drainage.
+The **Agriculture Crop Adaptation Atlas and Database (AgCAAD)** is used to rate the suitability of Alberta agricultural land for annual crop production from weather and soil information. 
+The AgCAAD model evaluates crop suitability across Alberta townships using climate heat supply, moisture supply, soil physical conditions, soil chemical conditions, and drainage. 
 
 ## Model Components
 
@@ -19,6 +19,10 @@ AgCAAD evaluates crop suitability from these component groups:
 ## High Performance Parallel Computing
 
 AgCAAD automatically distributes computations across township grids and crops using all available CPU cores, enabling fast, scalable parallel processing.
+
+## Interactive Web Application
+
+**[AgCAAD Explorer](https://www.4sanalyticsnmodelling.com/agcaad-explorer/)** lets you explore crop suitability maps, and generate suitability assessments through a modern web interface.
 
 ## Download
 
