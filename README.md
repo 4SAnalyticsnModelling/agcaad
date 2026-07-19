@@ -2,10 +2,23 @@
 
 # AgCAAD
 
----
 
 The Agriculture Crop Adaptation Atlas and Database (AgCAAD) is used to rate the suitability of Alberta agricultural land for annual crop production from weather and soil information. 
 The AgCAAD model evaluates crop suitability across Alberta townships using climate heat supply, moisture supply, soil physical conditions, soil chemical conditions, and drainage.
+
+## Model Components
+
+AgCAAD evaluates crop suitability from these component groups:
+
+- Climate heat supply: growing season length, winter cold tolerance, and temperature suitability.
+- Climate moisture supply: annual precipitation suitability.
+- Soil physical conditions: soil texture.
+- Soil chemical conditions: soil pH.
+- Soil drainage: drainage class suitability.
+
+## High Performance Parallel Computing
+
+AgCAAD automatically distributes computations across township grids and crops using all available CPU cores, enabling fast, scalable parallel processing.
 
 ## Download
 
@@ -43,11 +56,9 @@ chmod 'u+x' agcaad
 Windows example using this repository's included example input:
 
 ```powershell
-New-Item -ItemType Directory -Force ".\examples\agcaad_historical_weather_1981_2010\output"
-.\agcaad\bin\agcaad.exe run `
-  ".\examples\agcaad_historical_weather_1981_2010\input" `
-  ".\examples\agcaad_historical_weather_1981_2010\output"
+.\agcaad.exe run "examples\agcaad_historical_weather_1981_2010\input" "examples\agcaad_historical_weather_1981_2010\output"
 ```
+On Linux and macOS, use `./agcaad` instead of `.\agcaad.exe`.
 
 The final output is:
 
@@ -94,12 +105,6 @@ The full run writes one tab-delimited file with these columns:
 - `overall_suitability_rating`
 - `limitation_notes`
 
-`limitation_notes` reports factors rated Moderately Suitable, Slightly Suitable, or Unsuitable, for example:
-
-```text
-May be limited by moisture, soil texture
-```
-
 ## Suitability Classes
 
 | Score range | Rating |
@@ -119,25 +124,6 @@ AgCAAD evaluates crop suitability from these component groups:
 - Soil physical conditions: soil texture.
 - Soil chemical conditions: soil pH.
 - Soil drainage: drainage class suitability.
-
-The full `run` command computes all component scores in memory and writes only the final overall rating file.
-
-## Stage Commands
-
-Standalone stage commands are available for validation and debugging. These commands write their own tab-delimited stage output files.
-
-```powershell
-.\agcaad\bin\agcaad.exe texture <input-root> <output-root>
-.\agcaad\bin\agcaad.exe ph <input-root> <output-root>
-.\agcaad\bin\agcaad.exe drainage <input-root> <output-root>
-.\agcaad\bin\agcaad.exe precip-score <input-root> <output-root>
-.\agcaad\bin\agcaad.exe winter-cold <input-root> <output-root>
-.\agcaad\bin\agcaad.exe growing-season <input-root> <output-root>
-.\agcaad\bin\agcaad.exe temp-score <input-root> <output-root>
-.\agcaad\bin\agcaad.exe final <input-root> <output-root>
-```
-
-On Linux and macOS, use `./agcaad/bin/agcaad` instead of `.\agcaad\bin\agcaad.exe`.
 
 ## Repository Layout
 
@@ -184,10 +170,3 @@ Run from source:
 ```powershell
 zig build run -- run <input-root> <output-root>
 ```
-
-## Notes
-
-- The model uses prepared annual precipitation normals as an input file; it does not generate precipitation normals.
-- The full run does not write intermediate suitability files.
-- Numeric rounding uses Zig's default `@round` behavior.
-- Climate suitability stages split crop-by-township calculations across available CPU threads.
