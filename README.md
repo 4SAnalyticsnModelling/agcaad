@@ -28,6 +28,8 @@ AgCAAD distributes computations across township grids and crops. The optional `-
 
 Prebuilt binaries are available from the [`v1.1.0` release](https://github.com/4SAnalyticsnModelling/agcaad/releases/tag/v1.1.0).
 
+The example input dataset is available separately as [`examples.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.1.0/examples.zip).
+
 Choose the archive for your operating system and CPU:
 
 | Operating system | CPU | Download |
@@ -63,7 +65,7 @@ If `--threads` is omitted, the model runs with one worker thread. For example:
 .\agcaad.exe --input <input-root> --output <output-root>
 ```
 
-Windows example using this repository's included example input:
+Windows example after downloading and extracting `examples.zip`:
 
 ```powershell
 .\agcaad.exe --input "examples\agcaad_historical_weather_1981_2010\input" --output "examples\agcaad_historical_weather_1981_2010\output" --threads auto
@@ -78,7 +80,7 @@ crop_suitability_rankings_and_overall_ratings.txt
 
 ## Input Files
 
-The example dataset is stored in:
+After extracting [`examples.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.1.0/examples.zip), the example dataset has this layout:
 
 ```text
 examples/
