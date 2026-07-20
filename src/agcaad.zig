@@ -13,7 +13,7 @@ const Usage =
     \\AgCAAD modernization
     \\
     \\Usage:
-    \\  agcaad --input <input-root> --output <output-root> --threads <auto|number>
+    \\  agcaad --input <input-root> --output <output-root> [--threads <auto|number>]
     \\
     \\Inputs may be comma- or tab-delimited .txt files.
     \\Outputs are tab-delimited .txt files.
@@ -23,7 +23,7 @@ const Usage =
 const Options = struct {
     input_root: ?[]const u8 = null,
     output_root: ?[]const u8 = null,
-    thread_count: ?usize = null,
+    thread_count: ?usize = 1,
     threads_seen: bool = false,
 };
 
@@ -57,7 +57,6 @@ pub fn main(process_init: std.process.Init) !void {
     }
     const input_root = options.input_root orelse return usageError(error.MissingRequiredArgument);
     const output_root = options.output_root orelse return usageError(error.MissingRequiredArgument);
-    if (!options.threads_seen) return usageError(error.MissingRequiredArgument);
     parallel.setThreadCount(options.thread_count);
 
     try ensureOutputLayout(process_init.io, output_root);

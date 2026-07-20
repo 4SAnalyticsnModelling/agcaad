@@ -18,7 +18,7 @@ AgCAAD evaluates crop suitability from these component groups:
 
 ## High Performance Parallel Computing
 
-AgCAAD distributes computations across township grids and crops. Use `--threads auto` to use the available CPU cores, or provide a positive integer to set the worker count.
+AgCAAD distributes computations across township grids and crops. The optional `--threads` argument defaults to `1`. Use `--threads auto` to use the available CPU cores, or provide a positive integer to set the worker count.
 
 ## Interactive Web Application
 
@@ -42,19 +42,25 @@ Choose the archive for your operating system and CPU:
 ## Run With A Binary
 
 Download and extract the archive for your system. The full model reads all required flat input files from a user-defined input folder and writes only the final ratings file to a user-defined output folder.
-Pass the input folder, output folder, and thread setting as named arguments. AgCAAD creates the output folder when needed.
+Pass the input and output folders as named arguments. The optional `--threads` argument defaults to `1`; use `--threads auto` to use the available logical CPU cores, or provide a positive integer. AgCAAD creates the output folder when needed.
 
 Windows PowerShell:
 
 ```powershell
-.\agcaad.exe --input <input-root> --output <output-root> --threads <auto|number>
+.\agcaad.exe --input <input-root> --output <output-root> [--threads <auto|number>]
 ```
 
 Linux/macOS shell:
 
 ```sh
 chmod 'u+x' agcaad
-./agcaad --input <input-root> --output <output-root> --threads <auto|number>
+./agcaad --input <input-root> --output <output-root> [--threads <auto|number>]
+```
+
+If `--threads` is omitted, the model runs with one worker thread. For example:
+
+```powershell
+.\agcaad.exe --input <input-root> --output <output-root>
 ```
 
 Windows example using this repository's included example input:
@@ -152,6 +158,17 @@ Source builds require Zig `0.16.0`.
 ```powershell
 zig build
 ```
+
+Build optimized binaries for all supported platforms:
+
+```powershell
+$targets = @('x86_64-windows','aarch64-windows','x86_64-linux','aarch64-linux','x86_64-macos','aarch64-macos')
+foreach ($target in $targets) {
+    zig build "-Dtarget=$target" -Doptimize=ReleaseFast -p "dst\$target"
+}
+```
+
+The resulting binaries are written under `dst/<target>/bin/`.
 
 Run tests:
 
