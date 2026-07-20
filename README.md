@@ -92,11 +92,9 @@ examples/
       soil_component_properties_by_township.txt
       soil_drainage_requirement_scores.txt
       soil_texture_requirement_scores.txt
-      temperature_suitability_days_for_non_winter_crops.txt
-      temperature_suitability_days_for_winter_crops.txt
 ```
 
-Input folders should contain only the input `.txt` files. Nested input folders are not used.
+Temperature-suitability growing days are calculated for all crops from the daily temperature normals; no precomputed crop-day files are required. Input folders should contain only the input `.txt` files. Nested input folders are not used.
 
 ## Output Columns
 

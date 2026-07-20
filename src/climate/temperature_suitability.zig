@@ -29,10 +29,6 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, input_root_path: []const u8
     const output_paths = paths_mod.Paths.init(output_root_path);
     const hourly_txt = try input_paths.join(allocator, &.{"historical_hourly_temperature_by_township_day_hour.txt"});
     defer allocator.free(hourly_txt);
-    const other_days_txt = try input_paths.join(allocator, &.{"temperature_suitability_days_for_non_winter_crops.txt"});
-    defer allocator.free(other_days_txt);
-    const winter_days_txt = try input_paths.join(allocator, &.{"temperature_suitability_days_for_winter_crops.txt"});
-    defer allocator.free(winter_days_txt);
     const crop_txt = try input_paths.join(allocator, &.{"crop_suitability_requirements.txt"});
     defer allocator.free(crop_txt);
     const daily_txt = try input_paths.join(allocator, &.{"historical_daily_temperature_normals_by_township.txt"});
@@ -42,24 +38,18 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, input_root_path: []const u8
 
     const hourly_path = try paths_mod.existingInputPath(allocator, io, hourly_txt);
     defer allocator.free(hourly_path);
-    const other_days_path = try paths_mod.existingInputPath(allocator, io, other_days_txt);
-    defer allocator.free(other_days_path);
-    const winter_days_path = try paths_mod.existingInputPath(allocator, io, winter_days_txt);
-    defer allocator.free(winter_days_path);
     const crop_path = try paths_mod.existingInputPath(allocator, io, crop_txt);
     defer allocator.free(crop_path);
     const daily_path = try paths_mod.existingInputPath(allocator, io, daily_txt);
     defer allocator.free(daily_path);
 
-    try runWithPaths(allocator, io, hourly_path, other_days_path, winter_days_path, crop_path, daily_path, output_path);
+    try runWithPaths(allocator, io, hourly_path, crop_path, daily_path, output_path);
 }
 
 pub fn runWithPaths(
     allocator: std.mem.Allocator,
     io: std.Io,
     hourly_path: []const u8,
-    other_days_path: []const u8,
-    winter_days_path: []const u8,
     crop_path: []const u8,
     daily_path: []const u8,
     output_path: []const u8,
@@ -68,24 +58,13 @@ pub fn runWithPaths(
     defer strings.deinit();
     const crops = try loadCropTemperatures(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
-    var crop_index_by_name_id = std.AutoHashMap(u32, usize).init(allocator);
-    defer crop_index_by_name_id.deinit();
-    for (crops, 0..) |crop, crop_index| {
-        try crop_index_by_name_id.put(crop.crop_name_id, @intCast(crop_index));
-    }
-
     var crop_mask_by_township_day = std.AutoHashMap(u64, []u64).init(allocator);
     defer {
         var masks = crop_mask_by_township_day.valueIterator();
         while (masks.next()) |mask| allocator.free(mask.*);
         crop_mask_by_township_day.deinit();
     }
-    const crops_with_days = try allocator.alloc(bool, crops.len);
-    defer allocator.free(crops_with_days);
-    @memset(crops_with_days, false);
-    try loadCropDayMasks(allocator, io, &strings, crop_index_by_name_id, crops.len, crops_with_days, &crop_mask_by_township_day, other_days_path);
-    try loadCropDayMasks(allocator, io, &strings, crop_index_by_name_id, crops.len, crops_with_days, &crop_mask_by_township_day, winter_days_path);
-    try loadMissingCropDayMasks(allocator, io, &strings, crops, crops_with_days, &crop_mask_by_township_day, daily_path);
+    try loadCropDayMasks(allocator, io, &strings, crops, &crop_mask_by_township_day, daily_path);
 
     var score_by_crop_township = std.AutoHashMap(u64, ScoreAccumulator).init(allocator);
     defer score_by_crop_township.deinit();
@@ -97,10 +76,6 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     const input_paths = paths_mod.Paths.init(input_root_path);
     const hourly_txt = try input_paths.join(allocator, &.{"historical_hourly_temperature_by_township_day_hour.txt"});
     defer allocator.free(hourly_txt);
-    const other_days_txt = try input_paths.join(allocator, &.{"temperature_suitability_days_for_non_winter_crops.txt"});
-    defer allocator.free(other_days_txt);
-    const winter_days_txt = try input_paths.join(allocator, &.{"temperature_suitability_days_for_winter_crops.txt"});
-    defer allocator.free(winter_days_txt);
     const crop_txt = try input_paths.join(allocator, &.{"crop_suitability_requirements.txt"});
     defer allocator.free(crop_txt);
     const daily_txt = try input_paths.join(allocator, &.{"historical_daily_temperature_normals_by_township.txt"});
@@ -108,10 +83,6 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
 
     const hourly_path = try paths_mod.existingInputPath(allocator, io, hourly_txt);
     defer allocator.free(hourly_path);
-    const other_days_path = try paths_mod.existingInputPath(allocator, io, other_days_txt);
-    defer allocator.free(other_days_path);
-    const winter_days_path = try paths_mod.existingInputPath(allocator, io, winter_days_txt);
-    defer allocator.free(winter_days_path);
     const crop_path = try paths_mod.existingInputPath(allocator, io, crop_txt);
     defer allocator.free(crop_path);
     const daily_path = try paths_mod.existingInputPath(allocator, io, daily_txt);
@@ -121,24 +92,13 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     defer strings.deinit();
     const crops = try loadCropTemperatures(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
-    var crop_index_by_name_id = std.AutoHashMap(u32, usize).init(allocator);
-    defer crop_index_by_name_id.deinit();
-    for (crops, 0..) |crop, crop_index| {
-        try crop_index_by_name_id.put(crop.crop_name_id, @intCast(crop_index));
-    }
-
     var crop_mask_by_township_day = std.AutoHashMap(u64, []u64).init(allocator);
     defer {
         var masks = crop_mask_by_township_day.valueIterator();
         while (masks.next()) |mask| allocator.free(mask.*);
         crop_mask_by_township_day.deinit();
     }
-    const crops_with_days = try allocator.alloc(bool, crops.len);
-    defer allocator.free(crops_with_days);
-    @memset(crops_with_days, false);
-    try loadCropDayMasks(allocator, io, &strings, crop_index_by_name_id, crops.len, crops_with_days, &crop_mask_by_township_day, other_days_path);
-    try loadCropDayMasks(allocator, io, &strings, crop_index_by_name_id, crops.len, crops_with_days, &crop_mask_by_township_day, winter_days_path);
-    try loadMissingCropDayMasks(allocator, io, &strings, crops, crops_with_days, &crop_mask_by_township_day, daily_path);
+    try loadCropDayMasks(allocator, io, &strings, crops, &crop_mask_by_township_day, daily_path);
 
     var score_by_crop_township = std.AutoHashMap(u64, ScoreAccumulator).init(allocator);
     defer score_by_crop_township.deinit();
@@ -186,45 +146,10 @@ fn loadCropDayMasks(
     allocator: std.mem.Allocator,
     io: std.Io,
     strings: *array_store.StringInterner,
-    crop_index_by_name_id: std.AutoHashMap(u32, usize),
-    crop_count: usize,
-    crops_with_days: []bool,
-    crop_mask_by_township_day: *std.AutoHashMap(u64, []u64),
-    path: []const u8,
-) !void {
-    var reader = try stream_reader_mod.Reader.open(allocator, io, path);
-    defer reader.close();
-    const crop_i = try reader.columnIndex("crop_common_name");
-    const township_i = try reader.columnIndex("township_id");
-    const jd_i = try reader.columnIndex("julian_day");
-
-    while (try reader.nextLine()) |line| {
-        const crop_name_id = try strings.intern(try reader.cell(line, crop_i));
-        const crop_index = crop_index_by_name_id.get(crop_name_id) orelse continue;
-        crops_with_days[crop_index] = true;
-        const township_id = try strings.intern(try reader.cell(line, township_i));
-        const julian_day = try std.fmt.parseInt(u32, try reader.cell(line, jd_i), 10);
-        const day_key = packTownshipDay(township_id, julian_day);
-        const entry = try crop_mask_by_township_day.getOrPut(day_key);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = try allocator.alloc(u64, (crop_count + 63) / 64);
-            @memset(entry.value_ptr.*, 0);
-        }
-        entry.value_ptr.*[crop_index / 64] |= @as(u64, 1) << @intCast(crop_index % 64);
-    }
-}
-
-fn loadMissingCropDayMasks(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    strings: *array_store.StringInterner,
     crops: []const CropTemperature,
-    crops_with_days: []const bool,
     crop_mask_by_township_day: *std.AutoHashMap(u64, []u64),
     path: []const u8,
 ) !void {
-    if (std.mem.allEqual(bool, crops_with_days, true)) return;
-
     var reader = try stream_reader_mod.Reader.open(allocator, io, path);
     defer reader.close();
     const township_i = try reader.columnIndex("township_id");
@@ -245,11 +170,10 @@ fn loadMissingCropDayMasks(
         const julian_day = try std.fmt.parseInt(u32, try reader.cell(line, jd_i), 10);
         const maximum_temperature = try std.fmt.parseFloat(f32, try reader.cell(line, max_i));
         const minimum_temperature = try std.fmt.parseFloat(f32, try reader.cell(line, min_i));
-
         for (crops, 0..) |crop, crop_index| {
-            if (crops_with_days[crop_index]) continue;
-            const is_winter_annual = std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual");
-            if (is_winter_annual or (maximum_temperature > crop.absolute_minimum_temperature and minimum_temperature > 0)) {
+            if (std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual") or
+                (maximum_temperature > crop.absolute_minimum_temperature and minimum_temperature > 0))
+            {
                 started[crop_index] = true;
             }
             if (!started[crop_index] or minimum_temperature <= 0) continue;
