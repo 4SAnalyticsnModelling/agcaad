@@ -197,7 +197,9 @@ fn loadCropTextureRequirementColumns(
 
     while (reader.nextRow()) |row| {
         try crop_name_ids.append(allocator, try string_ids.intern(try row.cell(crop_name_column_index)));
-        try texture_requirement_ids.append(allocator, try string_ids.intern(try row.cell(texture_requirement_column_index)));
+        const requirement_code = try row.cell(texture_requirement_column_index);
+        const normalized_code = if (std.mem.eql(u8, requirement_code, "MMCV")) "MMCVC" else requirement_code;
+        try texture_requirement_ids.append(allocator, try string_ids.intern(normalized_code));
     }
 
     return .{

@@ -1,8 +1,6 @@
 const std = @import("std");
 const math = @import("../core/math.zig");
-const reader_mod = @import("../io/delimited_reader.zig");
 const writer_mod = @import("../io/tab_writer.zig");
-const paths_mod = @import("../paths.zig");
 
 const ScoreMask = struct {
     const winter: u8 = 1 << 0;
@@ -33,13 +31,6 @@ const OutputRow = struct {
     scores: SuitabilityScores,
     overall_score: f32,
     rating: []const u8,
-};
-
-const ScoreInput = struct {
-    file_name: []const u8,
-    column_name: []const u8,
-    field: Field,
-    mask_bit: u8,
 };
 
 pub const Field = enum {
@@ -100,79 +91,6 @@ fn maskForField(field: Field) u8 {
         .texture => ScoreMask.texture,
         .temperature => ScoreMask.temperature,
     };
-}
-
-const score_inputs = [_]ScoreInput{
-    .{ .file_name = "winter_cold_tolerance_scores_by_crop_township.txt", .column_name = "winter_cold_tolerance_score", .field = .winter, .mask_bit = ScoreMask.winter },
-    .{ .file_name = "precipitation_suitability_scores_by_crop_township.txt", .column_name = "precipitation_suitability_score", .field = .precip, .mask_bit = ScoreMask.precip },
-    .{ .file_name = "growing_season_suitability_scores_by_crop_township.txt", .column_name = "growing_season_suitability_score", .field = .growing_season, .mask_bit = ScoreMask.growing_season },
-    .{ .file_name = "soil_drainage_suitability_scores_by_crop_township.txt", .column_name = "soil_drainage_suitability_score", .field = .drainage, .mask_bit = ScoreMask.drainage },
-    .{ .file_name = "soil_ph_suitability_scores_by_crop_township.txt", .column_name = "soil_ph_suitability_score", .field = .ph, .mask_bit = ScoreMask.ph },
-    .{ .file_name = "soil_texture_suitability_scores_by_crop_township.txt", .column_name = "soil_texture_suitability_score", .field = .texture, .mask_bit = ScoreMask.texture },
-    .{ .file_name = "temperature_suitability_scores_by_crop_township.txt", .column_name = "temperature_suitability_score", .field = .temperature, .mask_bit = ScoreMask.temperature },
-};
-
-pub fn run(allocator: std.mem.Allocator, io: std.Io, input_root_path: []const u8, output_root_path: []const u8) !void {
-    const input_paths = paths_mod.Paths.init(input_root_path);
-    const output_paths = paths_mod.Paths.init(output_root_path);
-    var scores = std.StringHashMap(SuitabilityScores).init(allocator);
-    defer {
-        var it = scores.iterator();
-        while (it.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-            allocator.free(entry.value_ptr.common_name);
-            allocator.free(entry.value_ptr.township_id);
-        }
-        scores.deinit();
-    }
-
-    for (score_inputs) |score_input| {
-        try readScoreFile(allocator, io, input_paths, output_paths, &scores, score_input);
-    }
-
-    const output_path = try output_paths.join(allocator, &.{"crop_suitability_rankings_and_overall_ratings.txt"});
-    defer allocator.free(output_path);
-    try writeFinalRatings(allocator, io, scores, output_path);
-}
-
-fn readScoreFile(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    input_paths: paths_mod.Paths,
-    output_paths: paths_mod.Paths,
-    scores: *std.StringHashMap(SuitabilityScores),
-    score_input: ScoreInput,
-) !void {
-    const output_txt_path = try output_paths.join(allocator, &.{score_input.file_name});
-    defer allocator.free(output_txt_path);
-    const input_txt_path = try input_paths.join(allocator, &.{score_input.file_name});
-    defer allocator.free(input_txt_path);
-    const score_path = try paths_mod.generatedOrInputPath(allocator, io, output_txt_path, input_txt_path);
-    defer allocator.free(score_path);
-
-    var reader = try reader_mod.Reader.open(allocator, io, score_path);
-    defer reader.close();
-    const crop_i = try reader.header.columnIndex("crop_common_name");
-    const township_i = try reader.header.columnIndex("township_id");
-    const score_i = try reader.header.columnIndex(score_input.column_name);
-
-    while (reader.nextRow()) |row| {
-        const common_name = try row.cell(crop_i);
-        const township_id = try row.cell(township_i);
-        const score_value = try std.fmt.parseFloat(f32, try row.cell(score_i));
-        const key = try std.fmt.allocPrint(allocator, "{s}\t{s}", .{ common_name, township_id });
-        const entry = try scores.getOrPut(key);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = .{
-                .common_name = try allocator.dupe(u8, common_name),
-                .township_id = try allocator.dupe(u8, township_id),
-            };
-        } else {
-            allocator.free(key);
-        }
-        setScoreField(entry.value_ptr, score_input.field, score_value);
-        entry.value_ptr.present_mask |= score_input.mask_bit;
-    }
 }
 
 fn setScoreField(scores: *SuitabilityScores, field: Field, value: f32) void {

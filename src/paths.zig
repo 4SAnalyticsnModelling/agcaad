@@ -26,20 +26,3 @@ pub fn existingInputPath(allocator: std.mem.Allocator, io: std.Io, preferred_txt
     };
     return allocator.dupe(u8, preferred_txt_path);
 }
-
-pub fn exists(io: std.Io, path: []const u8) bool {
-    std.Io.Dir.cwd().access(io, path, .{}) catch {
-        return false;
-    };
-    return true;
-}
-
-pub fn generatedOrInputPath(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    output_txt_path: []const u8,
-    input_txt_path: []const u8,
-) ![]const u8 {
-    if (exists(io, output_txt_path)) return allocator.dupe(u8, output_txt_path);
-    return existingInputPath(allocator, io, input_txt_path);
-}

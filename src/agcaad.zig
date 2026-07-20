@@ -7,25 +7,25 @@ const winter_cold = @import("climate/winter_cold.zig");
 const growing_season = @import("climate/growing_season.zig");
 const temperature_suitability = @import("climate/temperature_suitability.zig");
 const final_rating = @import("suitability/final_rating.zig");
+const parallel = @import("core/parallel.zig");
 
 const Usage =
     \\AgCAAD modernization
     \\
     \\Usage:
-    \\  agcaad run <input-root> <output-root>
-    \\  agcaad texture <input-root> <output-root>
-    \\  agcaad ph <input-root> <output-root>
-    \\  agcaad drainage <input-root> <output-root>
-    \\  agcaad precip-score <input-root> <output-root>
-    \\  agcaad winter-cold <input-root> <output-root>
-    \\  agcaad growing-season <input-root> <output-root>
-    \\  agcaad temp-score <input-root> <output-root>
-    \\  agcaad final <input-root> <output-root>
+    \\  agcaad --input <input-root> --output <output-root> --threads <auto|number>
     \\
     \\Inputs may be comma- or tab-delimited .txt files.
     \\Outputs are tab-delimited .txt files.
     \\
 ;
+
+const Options = struct {
+    input_root: ?[]const u8 = null,
+    output_root: ?[]const u8 = null,
+    thread_count: ?usize = null,
+    threads_seen: bool = false,
+};
 
 pub fn main(process_init: std.process.Init) !void {
     const allocator = process_init.gpa;
@@ -34,60 +34,55 @@ pub fn main(process_init: std.process.Init) !void {
     defer argument_iterator.deinit();
 
     _ = argument_iterator.next();
-    const command = argument_iterator.next() orelse {
-        std.debug.print("{s}", .{Usage});
-        return;
-    };
-    const input_root = argument_iterator.next() orelse {
-        std.debug.print("{s}", .{Usage});
-        return;
-    };
-    const output_root = argument_iterator.next() orelse {
-        std.debug.print("{s}", .{Usage});
-        return;
-    };
-    const optional_weather_input = argument_iterator.next();
+    var options: Options = .{};
+    while (argument_iterator.next()) |argument| {
+        const value = argument_iterator.next() orelse return usageError(error.MissingArgumentValue);
+        if (std.mem.eql(u8, argument, "--input")) {
+            if (options.input_root != null) return usageError(error.DuplicateArgument);
+            options.input_root = value;
+        } else if (std.mem.eql(u8, argument, "--output")) {
+            if (options.output_root != null) return usageError(error.DuplicateArgument);
+            options.output_root = value;
+        } else if (std.mem.eql(u8, argument, "--threads")) {
+            if (options.threads_seen) return usageError(error.DuplicateArgument);
+            options.threads_seen = true;
+            if (!std.mem.eql(u8, value, "auto")) {
+                const count = std.fmt.parseInt(usize, value, 10) catch return usageError(error.InvalidThreadCount);
+                if (count == 0) return usageError(error.InvalidThreadCount);
+                options.thread_count = count;
+            }
+        } else {
+            return usageError(error.UnknownArgument);
+        }
+    }
+    const input_root = options.input_root orelse return usageError(error.MissingRequiredArgument);
+    const output_root = options.output_root orelse return usageError(error.MissingRequiredArgument);
+    if (!options.threads_seen) return usageError(error.MissingRequiredArgument);
+    parallel.setThreadCount(options.thread_count);
 
     try ensureOutputLayout(process_init.io, output_root);
 
-    if (std.mem.eql(u8, command, "run")) {
-        if (optional_weather_input != null) return error.UnexpectedWeatherInputForInMemoryRun;
-        var final_scores = final_rating.Accumulator.init(allocator);
-        defer final_scores.deinit();
+    var final_scores = final_rating.Accumulator.init(allocator);
+    defer final_scores.deinit();
 
-        try texture.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
-        try ph.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
-        try drainage.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
-        try precip_suitability.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
-        try winter_cold.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
-        try growing_season.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
-        try temperature_suitability.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
+    try texture.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
+    try ph.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
+    try drainage.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
+    try precip_suitability.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
+    try winter_cold.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
+    try growing_season.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
+    try temperature_suitability.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
 
-        const output_paths = @import("paths.zig").Paths.init(output_root);
-        const final_output_path = try output_paths.join(allocator, &.{"crop_suitability_rankings_and_overall_ratings.txt"});
-        defer allocator.free(final_output_path);
-        try final_scores.write(process_init.io, final_output_path);
-        std.debug.print("AgCAAD run completed.\n", .{});
-    } else if (std.mem.eql(u8, command, "texture")) {
-        try texture.run(allocator, process_init.io, input_root, output_root);
-    } else if (std.mem.eql(u8, command, "ph")) {
-        try ph.run(allocator, process_init.io, input_root, output_root);
-    } else if (std.mem.eql(u8, command, "drainage")) {
-        try drainage.run(allocator, process_init.io, input_root, output_root);
-    } else if (std.mem.eql(u8, command, "precip-score")) {
-        try precip_suitability.run(allocator, process_init.io, input_root, output_root);
-    } else if (std.mem.eql(u8, command, "winter-cold")) {
-        try winter_cold.run(allocator, process_init.io, input_root, output_root);
-    } else if (std.mem.eql(u8, command, "growing-season")) {
-        try growing_season.run(allocator, process_init.io, input_root, output_root);
-    } else if (std.mem.eql(u8, command, "temp-score")) {
-        try temperature_suitability.run(allocator, process_init.io, input_root, output_root);
-    } else if (std.mem.eql(u8, command, "final")) {
-        try final_rating.run(allocator, process_init.io, input_root, output_root);
-    } else {
-        std.debug.print("{s}", .{Usage});
-        return error.UnknownCommand;
-    }
+    const output_paths = @import("paths.zig").Paths.init(output_root);
+    const final_output_path = try output_paths.join(allocator, &.{"crop_suitability_rankings_and_overall_ratings.txt"});
+    defer allocator.free(final_output_path);
+    try final_scores.write(process_init.io, final_output_path);
+    std.debug.print("AgCAAD run completed.\n", .{});
+}
+
+fn usageError(err: anyerror) anyerror {
+    std.debug.print("{s}", .{Usage});
+    return err;
 }
 
 fn ensureOutputLayout(io: std.Io, output_root: []const u8) !void {

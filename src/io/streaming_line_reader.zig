@@ -68,7 +68,8 @@ fn trimLine(line: []const u8) []const u8 {
 }
 
 fn trimCell(cell: []const u8) []const u8 {
-    const trimmed_cell = std.mem.trim(u8, cell, " \r");
+    var trimmed_cell = std.mem.trim(u8, cell, " \r");
+    if (std.mem.startsWith(u8, trimmed_cell, "\xEF\xBB\xBF")) trimmed_cell = trimmed_cell[3..];
     if (trimmed_cell.len >= 2 and trimmed_cell[0] == '"' and trimmed_cell[trimmed_cell.len - 1] == '"') {
         return trimmed_cell[1 .. trimmed_cell.len - 1];
     }

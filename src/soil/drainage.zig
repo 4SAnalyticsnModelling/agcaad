@@ -140,7 +140,11 @@ fn loadSoils(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
     var township_ids: std.ArrayList(u32) = .empty;
     var drainage_code_ids: std.ArrayList(u32) = .empty;
     var multipliers: std.ArrayList(f32) = .empty;
-    errdefer { township_ids.deinit(allocator); drainage_code_ids.deinit(allocator); multipliers.deinit(allocator); }
+    errdefer {
+        township_ids.deinit(allocator);
+        drainage_code_ids.deinit(allocator);
+        multipliers.deinit(allocator);
+    }
     while (r.nextRow()) |row| {
         try township_ids.append(allocator, try strings.intern(try row.cell(township_i)));
         try drainage_code_ids.append(allocator, try strings.intern(try row.cell(drainage_i)));
@@ -154,12 +158,19 @@ fn loadCrops(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
     defer r.close();
     const crop_i = try r.header.columnIndex("crop_common_name");
     const req_i = try r.header.columnIndex("soil_drainage_requirement_code");
+    const description_i = try r.header.columnIndex("soil_drainage_requirement_description");
     var crop_name_ids: std.ArrayList(u32) = .empty;
     var drainage_requirement_ids: std.ArrayList(u32) = .empty;
-    errdefer { crop_name_ids.deinit(allocator); drainage_requirement_ids.deinit(allocator); }
+    errdefer {
+        crop_name_ids.deinit(allocator);
+        drainage_requirement_ids.deinit(allocator);
+    }
     while (r.nextRow()) |row| {
         try crop_name_ids.append(allocator, try strings.intern(try row.cell(crop_i)));
-        try drainage_requirement_ids.append(allocator, try strings.intern(try row.cell(req_i)));
+        const requirement_code = try row.cell(req_i);
+        const description = try row.cell(description_i);
+        const normalized_code = if (std.mem.eql(u8, requirement_code, "A") and std.mem.startsWith(u8, description, "Semi-Exce")) "SE" else requirement_code;
+        try drainage_requirement_ids.append(allocator, try strings.intern(normalized_code));
     }
     return .{ .crop_name_ids = try crop_name_ids.toOwnedSlice(allocator), .drainage_requirement_ids = try drainage_requirement_ids.toOwnedSlice(allocator) };
 }
@@ -173,7 +184,11 @@ fn loadKeys(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Stri
     var drainage_requirement_ids: std.ArrayList(u32) = .empty;
     var drainage_code_ids: std.ArrayList(u32) = .empty;
     var scores: std.ArrayList(f32) = .empty;
-    errdefer { drainage_requirement_ids.deinit(allocator); drainage_code_ids.deinit(allocator); scores.deinit(allocator); }
+    errdefer {
+        drainage_requirement_ids.deinit(allocator);
+        drainage_code_ids.deinit(allocator);
+        scores.deinit(allocator);
+    }
     while (r.nextRow()) |row| {
         try drainage_requirement_ids.append(allocator, try strings.intern(try row.cell(req_i)));
         try drainage_code_ids.append(allocator, try strings.intern(try row.cell(drainage_i)));
@@ -198,4 +213,6 @@ fn writeResults(allocator: std.mem.Allocator, io: std.Io, strings: array_store.S
     try output.flush();
 }
 
-fn sortRows(_: void, a: DrainageResult, b: DrainageResult) bool { return if (a.crop_name_id == b.crop_name_id) a.township_id < b.township_id else a.crop_name_id < b.crop_name_id; }
+fn sortRows(_: void, a: DrainageResult, b: DrainageResult) bool {
+    return if (a.crop_name_id == b.crop_name_id) a.township_id < b.township_id else a.crop_name_id < b.crop_name_id;
+}

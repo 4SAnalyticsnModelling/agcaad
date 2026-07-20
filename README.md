@@ -18,7 +18,7 @@ AgCAAD evaluates crop suitability from these component groups:
 
 ## High Performance Parallel Computing
 
-AgCAAD automatically distributes computations across township grids and crops using all available CPU cores, enabling fast, scalable parallel processing.
+AgCAAD distributes computations across township grids and crops. Use `--threads auto` to use the available CPU cores, or provide a positive integer to set the worker count.
 
 ## Interactive Web Application
 
@@ -42,25 +42,25 @@ Choose the archive for your operating system and CPU:
 ## Run With A Binary
 
 Download and extract the archive for your system. The full model reads all required flat input files from a user-defined input folder and writes only the final ratings file to a user-defined output folder.
-Create the output folder before running, then pass that folder as `<output-root>`.
+Pass the input folder, output folder, and thread setting as named arguments. AgCAAD creates the output folder when needed.
 
 Windows PowerShell:
 
 ```powershell
-.\agcaad.exe run <input-root> <output-root>
+.\agcaad.exe --input <input-root> --output <output-root> --threads <auto|number>
 ```
 
 Linux/macOS shell:
 
 ```sh
 chmod 'u+x' agcaad
-./agcaad run <input-root> <output-root>
+./agcaad --input <input-root> --output <output-root> --threads <auto|number>
 ```
 
 Windows example using this repository's included example input:
 
 ```powershell
-.\agcaad.exe run "examples\agcaad_historical_weather_1981_2010\input" "examples\agcaad_historical_weather_1981_2010\output"
+.\agcaad.exe --input "examples\agcaad_historical_weather_1981_2010\input" --output "examples\agcaad_historical_weather_1981_2010\output" --threads auto
 ```
 On Linux and macOS, use `./agcaad` instead of `.\agcaad.exe`.
 
@@ -119,16 +119,6 @@ The full run writes one tab-delimited file with these columns:
 | `2.5-3.5` | Suitable |
 | `> 3.5` | Highly Suitable |
 
-## Model Components
-
-AgCAAD evaluates crop suitability from these component groups:
-
-- Climate heat supply: growing season length, winter cold tolerance, and temperature suitability.
-- Climate moisture supply: annual precipitation suitability.
-- Soil physical conditions: soil texture.
-- Soil chemical conditions: soil pH.
-- Soil drainage: drainage class suitability.
-
 ## Repository Layout
 
 ```text
@@ -172,5 +162,5 @@ zig build test
 Run from source:
 
 ```powershell
-zig build run -- run <input-root> <output-root>
+zig build run -- --input <input-root> --output <output-root> --threads auto
 ```

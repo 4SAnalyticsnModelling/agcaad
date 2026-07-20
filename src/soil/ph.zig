@@ -122,7 +122,11 @@ fn loadSoils(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
     var township_ids: std.ArrayList(u32) = .empty;
     var multipliers: std.ArrayList(f32) = .empty;
     var ph_values: std.ArrayList(f32) = .empty;
-    errdefer { township_ids.deinit(allocator); multipliers.deinit(allocator); ph_values.deinit(allocator); }
+    errdefer {
+        township_ids.deinit(allocator);
+        multipliers.deinit(allocator);
+        ph_values.deinit(allocator);
+    }
     while (r.nextRow()) |row| {
         try township_ids.append(allocator, try strings.intern(try row.cell(township_i)));
         try multipliers.append(allocator, math.roundToTwoDecimals(try std.fmt.parseFloat(f32, try row.cell(multiplier_i))));
@@ -140,7 +144,11 @@ fn loadCrops(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
     var crop_name_ids: std.ArrayList(u32) = .empty;
     var ph_minimums: std.ArrayList(f32) = .empty;
     var ph_maximums: std.ArrayList(f32) = .empty;
-    errdefer { crop_name_ids.deinit(allocator); ph_minimums.deinit(allocator); ph_maximums.deinit(allocator); }
+    errdefer {
+        crop_name_ids.deinit(allocator);
+        ph_minimums.deinit(allocator);
+        ph_maximums.deinit(allocator);
+    }
     while (r.nextRow()) |row| {
         try crop_name_ids.append(allocator, try strings.intern(try row.cell(crop_i)));
         try ph_minimums.append(allocator, try std.fmt.parseFloat(f32, try row.cell(min_i)));
@@ -181,4 +189,6 @@ fn writeResults(allocator: std.mem.Allocator, io: std.Io, strings: array_store.S
     try output.flush();
 }
 
-fn sortRows(_: void, a: PhResult, b: PhResult) bool { return if (a.crop_name_id == b.crop_name_id) a.township_id < b.township_id else a.crop_name_id < b.crop_name_id; }
+fn sortRows(_: void, a: PhResult, b: PhResult) bool {
+    return if (a.crop_name_id == b.crop_name_id) a.township_id < b.township_id else a.crop_name_id < b.crop_name_id;
+}
