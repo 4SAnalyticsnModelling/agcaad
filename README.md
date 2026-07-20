@@ -26,18 +26,18 @@ AgCAAD distributes computations across township grids and crops. The optional `-
 
 ## Download
 
-Prebuilt binaries are available from the [`v1.0.0` release](https://github.com/4SAnalyticsnModelling/agcaad/releases/tag/v1.0.0).
+Prebuilt binaries are available from the [`v1.1.0` release](https://github.com/4SAnalyticsnModelling/agcaad/releases/tag/v1.1.0).
 
 Choose the archive for your operating system and CPU:
 
 | Operating system | CPU | Download |
 | --- | --- | --- |
-| Windows | Intel/AMD 64-bit | [`x86_64-windows.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.0.0/x86_64-windows.zip) |
-| Windows | ARM64 | [`aarch64-windows.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.0.0/aarch64-windows.zip) |
-| Linux | Intel/AMD 64-bit | [`x86_64-linux.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.0.0/x86_64-linux.zip) |
-| Linux | ARM64 | [`aarch64-linux.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.0.0/aarch64-linux.zip) |
-| macOS | Intel 64-bit | [`x86_64-macos.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.0.0/x86_64-macos.zip) |
-| macOS | Apple Silicon | [`aarch64-macos.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.0.0/aarch64-macos.zip) |
+| Windows | Intel/AMD 64-bit | [`x86_64-windows.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.1.0/x86_64-windows.zip) |
+| Windows | ARM64 | [`aarch64-windows.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.1.0/aarch64-windows.zip) |
+| Linux | Intel/AMD 64-bit | [`x86_64-linux.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.1.0/x86_64-linux.zip) |
+| Linux | ARM64 | [`aarch64-linux.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.1.0/aarch64-linux.zip) |
+| macOS | Intel 64-bit | [`x86_64-macos.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.1.0/x86_64-macos.zip) |
+| macOS | Apple Silicon | [`aarch64-macos.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.1.0/aarch64-macos.zip) |
 
 ## Run With A Binary
 
