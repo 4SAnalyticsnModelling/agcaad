@@ -248,7 +248,7 @@ fn writeLimitationNotes(output: *writer_mod.Writer, scores: SuitabilityScores) !
     try writeLimitationNote(output, &has_note, "soil drainage", scores.drainage_score);
     try writeLimitationNote(output, &has_note, "soil pH", scores.ph_score);
     try writeLimitationNote(output, &has_note, "soil texture", scores.texture_score);
-    try writeLimitationNote(output, &has_note, "temperature", scores.temperature_score);
+    try writeLimitationNote(output, &has_note, "heat", scores.temperature_score);
     if (!has_note) try output.writeAll("No major limitation identified");
 }
 

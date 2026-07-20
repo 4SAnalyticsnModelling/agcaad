@@ -62,16 +62,18 @@ pub fn runWithPaths(
     defer strings.deinit();
     const crops = try loadCropTemperatures(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
-    if (crops.len > 64) return error.TooManyCropsForBitMask;
-
-    var crop_index_by_name_id = std.AutoHashMap(u32, u6).init(allocator);
+    var crop_index_by_name_id = std.AutoHashMap(u32, usize).init(allocator);
     defer crop_index_by_name_id.deinit();
     for (crops, 0..) |crop, crop_index| {
         try crop_index_by_name_id.put(crop.crop_name_id, @intCast(crop_index));
     }
 
-    var crop_mask_by_township_day = std.AutoHashMap(u64, u64).init(allocator);
-    defer crop_mask_by_township_day.deinit();
+    var crop_mask_by_township_day = std.AutoHashMap(u64, []u64).init(allocator);
+    defer {
+        var masks = crop_mask_by_township_day.valueIterator();
+        while (masks.next()) |mask| allocator.free(mask.*);
+        crop_mask_by_township_day.deinit();
+    }
     try loadCropDayMasks(allocator, io, &strings, crop_index_by_name_id, &crop_mask_by_township_day, other_days_path);
     try loadCropDayMasks(allocator, io, &strings, crop_index_by_name_id, &crop_mask_by_township_day, winter_days_path);
 
@@ -105,16 +107,18 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     defer strings.deinit();
     const crops = try loadCropTemperatures(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
-    if (crops.len > 64) return error.TooManyCropsForBitMask;
-
-    var crop_index_by_name_id = std.AutoHashMap(u32, u6).init(allocator);
+    var crop_index_by_name_id = std.AutoHashMap(u32, usize).init(allocator);
     defer crop_index_by_name_id.deinit();
     for (crops, 0..) |crop, crop_index| {
         try crop_index_by_name_id.put(crop.crop_name_id, @intCast(crop_index));
     }
 
-    var crop_mask_by_township_day = std.AutoHashMap(u64, u64).init(allocator);
-    defer crop_mask_by_township_day.deinit();
+    var crop_mask_by_township_day = std.AutoHashMap(u64, []u64).init(allocator);
+    defer {
+        var masks = crop_mask_by_township_day.valueIterator();
+        while (masks.next()) |mask| allocator.free(mask.*);
+        crop_mask_by_township_day.deinit();
+    }
     try loadCropDayMasks(allocator, io, &strings, crop_index_by_name_id, &crop_mask_by_township_day, other_days_path);
     try loadCropDayMasks(allocator, io, &strings, crop_index_by_name_id, &crop_mask_by_township_day, winter_days_path);
 
@@ -162,8 +166,8 @@ fn loadCropDayMasks(
     allocator: std.mem.Allocator,
     io: std.Io,
     strings: *array_store.StringInterner,
-    crop_index_by_name_id: std.AutoHashMap(u32, u6),
-    crop_mask_by_township_day: *std.AutoHashMap(u64, u64),
+    crop_index_by_name_id: std.AutoHashMap(u32, usize),
+    crop_mask_by_township_day: *std.AutoHashMap(u64, []u64),
     path: []const u8,
 ) !void {
     var reader = try stream_reader_mod.Reader.open(allocator, io, path);
@@ -179,8 +183,11 @@ fn loadCropDayMasks(
         const julian_day = try std.fmt.parseInt(u32, try reader.cell(line, jd_i), 10);
         const day_key = packTownshipDay(township_id, julian_day);
         const entry = try crop_mask_by_township_day.getOrPut(day_key);
-        const crop_bit = @as(u64, 1) << crop_index;
-        if (entry.found_existing) entry.value_ptr.* |= crop_bit else entry.value_ptr.* = crop_bit;
+        if (!entry.found_existing) {
+            entry.value_ptr.* = try allocator.alloc(u64, (crop_index_by_name_id.count() + 63) / 64);
+            @memset(entry.value_ptr.*, 0);
+        }
+        entry.value_ptr.*[crop_index / 64] |= @as(u64, 1) << @intCast(crop_index % 64);
     }
 }
 
@@ -189,7 +196,7 @@ fn streamHourlyScores(
     io: std.Io,
     strings: *array_store.StringInterner,
     crops: []const CropTemperature,
-    crop_mask_by_township_day: std.AutoHashMap(u64, u64),
+    crop_mask_by_township_day: std.AutoHashMap(u64, []u64),
     score_by_crop_township: *std.AutoHashMap(u64, ScoreAccumulator),
     hourly_path: []const u8,
 ) !void {
@@ -205,17 +212,19 @@ fn streamHourlyScores(
         const crop_mask = crop_mask_by_township_day.get(packTownshipDay(township_id, julian_day)) orelse continue;
         const hourly_temperature = try std.fmt.parseFloat(f32, try reader.cell(line, temp_i));
 
-        var remaining_mask = crop_mask;
-        while (remaining_mask != 0) {
-            const crop_index: u6 = @intCast(@ctz(remaining_mask));
-            remaining_mask &= remaining_mask - 1;
-            const crop = crops[crop_index];
-            const score = hourlyTemperatureScore(hourly_temperature, crop);
-            const key = packCropTownship(crop.crop_name_id, township_id);
-            const entry = try score_by_crop_township.getOrPut(key);
-            if (!entry.found_existing) entry.value_ptr.* = .{};
-            entry.value_ptr.score_sum += @floatFromInt(score);
-            entry.value_ptr.score_count += 1;
+        for (crop_mask, 0..) |mask_word, word_index| {
+            var remaining_mask = mask_word;
+            while (remaining_mask != 0) {
+                const bit_index: u6 = @intCast(@ctz(remaining_mask));
+                remaining_mask &= remaining_mask - 1;
+                const crop = crops[word_index * 64 + bit_index];
+                const score = hourlyTemperatureScore(hourly_temperature, crop);
+                const key = packCropTownship(crop.crop_name_id, township_id);
+                const entry = try score_by_crop_township.getOrPut(key);
+                if (!entry.found_existing) entry.value_ptr.* = .{};
+                entry.value_ptr.score_sum += @floatFromInt(score);
+                entry.value_ptr.score_count += 1;
+            }
         }
     }
 }
