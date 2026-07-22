@@ -1,4 +1,4 @@
-# AgCAAD model specification
+# Agriculture Crop Adaptation Atlas and Database (AgCAAD) Model
 
 ## Purpose
 
