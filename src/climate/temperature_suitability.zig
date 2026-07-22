@@ -222,40 +222,89 @@ fn loadCropDayMasks(
     defer reader.close();
     const township_i = try reader.columnIndex("township_id");
     const jd_i = try reader.columnIndex("julian_day");
-    const max_i = try reader.columnIndex("maximum_temperature_quantile_75_celsius");
+    const max_25_i = try reader.columnIndex("maximum_temperature_quantile_25_celsius");
+    const max_75_i = try reader.columnIndex("maximum_temperature_quantile_75_celsius");
     const min_i = try reader.columnIndex("minimum_temperature_quantile_25_celsius");
-    const started = try allocator.alloc(bool, crops.len);
-    defer allocator.free(started);
-    @memset(started, false);
+    // 0=not started, 1=active, 2=ended. Winter crops reuse these as
+    // dormant/spring-active/harvested before midyear and waiting/active/ended
+    // after midyear.
+    const states = try allocator.alloc(u2, crops.len);
+    defer allocator.free(states);
+    @memset(states, 0);
     var previous_township_id: ?u32 = null;
     const parse = @import("../io/parse.zig");
 
     while (try reader.nextLine()) |line| {
-        const fields = try reader.projectCells(4, line, .{ township_i, jd_i, max_i, min_i });
+        const fields = try reader.projectCells(5, line, .{ township_i, jd_i, max_25_i, max_75_i, min_i });
         const township_id = if (previous_township_id) |previous_id|
             if (std.mem.eql(u8, fields[0], strings.get(previous_id))) previous_id else try strings.intern(fields[0])
         else
             try strings.intern(fields[0]);
         if (previous_township_id == null or previous_township_id.? != township_id) {
-            @memset(started, false);
+            @memset(states, 0);
             previous_township_id = township_id;
             _ = try crop_mask_by_township_day.ensureTownship(township_id);
         }
         const julian_day = try parse.integer(u32, path, reader.row_number, "julian_day", fields[1]);
-        const maximum_temperature = try parse.float(f32, path, reader.row_number, "maximum_temperature_quantile_75_celsius", fields[2]);
-        const minimum_temperature = try parse.float(f32, path, reader.row_number, "minimum_temperature_quantile_25_celsius", fields[3]);
+        const maximum_25 = try parse.float(f32, path, reader.row_number, "maximum_temperature_quantile_25_celsius", fields[2]);
+        const maximum_75 = try parse.float(f32, path, reader.row_number, "maximum_temperature_quantile_75_celsius", fields[3]);
+        const minimum_25 = try parse.float(f32, path, reader.row_number, "minimum_temperature_quantile_25_celsius", fields[4]);
         for (crops, 0..) |crop, crop_index| {
-            if (crop.is_winter_annual or
-                (maximum_temperature > crop.absolute_minimum_temperature and minimum_temperature > 0))
-            {
-                started[crop_index] = true;
-            }
-            if (!started[crop_index] or minimum_temperature <= 0) continue;
+            const active = if (crop.is_winter_annual)
+                winterAnnualDayIsActive(&states[crop_index], julian_day, maximum_25, maximum_75, minimum_25, crop)
+            else
+                annualDayIsActive(&states[crop_index], julian_day, maximum_75, minimum_25, crop.absolute_minimum_temperature);
+            if (!active) continue;
 
             const mask = try crop_mask_by_township_day.getOrCreate(packTownshipDay(township_id, julian_day));
             mask[crop_index / 64] |= @as(u64, 1) << @intCast(crop_index % 64);
         }
     }
+}
+
+fn annualDayIsActive(state: *u2, julian_day: u32, maximum_75: f32, minimum_25: f32, absolute_minimum: f32) bool {
+    if (state.* == 2) return false;
+    const suitable = maximum_75 > absolute_minimum and minimum_25 > 0;
+    if (state.* == 0) {
+        if (!suitable) return false;
+        state.* = 1;
+    } else if (!suitable) {
+        // Ignore short winter warm spells; only a failure after midyear closes
+        // the crop's continuous frost-free growing period.
+        state.* = if (julian_day <= 183) 0 else 2;
+        return false;
+    }
+    return true;
+}
+
+fn winterAnnualDayIsActive(state: *u2, julian_day: u32, maximum_25: f32, maximum_75: f32, minimum_25: f32, crop: CropTemperature) bool {
+    // Appendix D pp. 12-13: spring growth begins only after both dormancy-end
+    // tests pass and ends at the 3-in-4 optimum-maximum harvest threshold.
+    // Fall growth begins after the 1-in-4 planting threshold and ends when
+    // either dormancy-start test is met.
+    if (julian_day <= 183) {
+        if (state.* == 2) return false;
+        if (state.* == 0) {
+            if (maximum_25 <= crop.absolute_minimum_temperature or minimum_25 <= 0) return false;
+            state.* = 1;
+        }
+        if (maximum_25 > crop.optimum_maximum_temperature) {
+            state.* = 2;
+            return false;
+        }
+        return true;
+    }
+    if (julian_day == 184) state.* = 0;
+    if (state.* == 2) return false;
+    if (state.* == 0) {
+        if (maximum_75 > crop.optimum_maximum_temperature) return false;
+        state.* = 1;
+    }
+    if (maximum_75 <= crop.absolute_minimum_temperature or minimum_25 < 0) {
+        state.* = 2;
+        return false;
+    }
+    return true;
 }
 
 fn streamHourlyScores(
@@ -325,7 +374,8 @@ fn streamHourlyScores(
 fn hourlyTemperatureScore(hourly_temperature: f32, crop: CropTemperature) i32 {
     if (hourly_temperature < crop.absolute_minimum_temperature) return 0;
     if (hourly_temperature < crop.optimum_minimum_temperature) return 3;
-    if (hourly_temperature <= crop.optimum_maximum_temperature) return 4;
+    // Appendix D, equation 2: the optimum hourly-temperature class scores 5.
+    if (hourly_temperature <= crop.optimum_maximum_temperature) return 5;
     if (hourly_temperature <= crop.absolute_maximum_temperature) return 3;
     return 0;
 }
@@ -368,8 +418,20 @@ test "example-derived onion hourly temperature scoring" {
     };
     try std.testing.expectEqual(@as(i32, 0), hourlyTemperatureScore(6.9, onion));
     try std.testing.expectEqual(@as(i32, 3), hourlyTemperatureScore(10, onion));
-    try std.testing.expectEqual(@as(i32, 4), hourlyTemperatureScore(20, onion));
+    try std.testing.expectEqual(@as(i32, 5), hourlyTemperatureScore(20, onion));
     try std.testing.expectEqual(@as(i32, 0), hourlyTemperatureScore(30, onion));
+}
+
+test "annual active period ignores winter thaw and closes in fall" {
+    const onion: CropTemperature = .{ .crop_name_id = 0, .is_winter_annual = false, .absolute_maximum_temperature = 29, .absolute_minimum_temperature = 7, .optimum_maximum_temperature = 24, .optimum_minimum_temperature = 12 };
+    var state: u2 = 0;
+    try std.testing.expect(annualDayIsActive(&state, 20, 8, 1, onion.absolute_minimum_temperature));
+    try std.testing.expect(!annualDayIsActive(&state, 21, 6, -1, onion.absolute_minimum_temperature));
+    try std.testing.expectEqual(@as(u2, 0), state);
+    try std.testing.expect(annualDayIsActive(&state, 120, 15, 5, onion.absolute_minimum_temperature));
+    try std.testing.expect(!annualDayIsActive(&state, 250, 6, 4, onion.absolute_minimum_temperature));
+    try std.testing.expectEqual(@as(u2, 2), state);
+    try std.testing.expect(!annualDayIsActive(&state, 251, 15, 5, onion.absolute_minimum_temperature));
 }
 
 test "dense score grid and township mask indexes remain independent" {

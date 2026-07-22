@@ -69,7 +69,7 @@ pub const Accumulator = struct {
 
     pub fn addScore(self: *Accumulator, crop_common_name: []const u8, township_id: []const u8, field: Field, value: f32) !void {
         const maximum: f32 = switch (field) {
-            .drainage, .ph, .texture => 5,
+            .drainage, .ph, .texture, .temperature => 5,
             else => 4,
         };
         if (!std.math.isFinite(value) or value < 0 or value > maximum) {
@@ -182,11 +182,13 @@ fn writeFinalRatings(allocator: std.mem.Allocator, io: std.Io, strings: array_st
 fn calculateOverallScore(scores: SuitabilityScores) f32 {
     const soil_temperature_mean = (scores.temperature_score + scores.texture_score + scores.drainage_score + scores.ph_score) / 4.0;
     const climate_product = (scores.precipitation_suitability_score * scores.growing_season_score * scores.winter_cold_tolerance_score) / 64.0;
-    return math.roundToOneDecimal(soil_temperature_mean * std.math.pow(f32, climate_product, 1.0 / 3.0));
+    // Appendix D, figure 6. The printed "0.3" denotes a cube root; retain
+    // full precision here so the rating is not changed by display rounding.
+    return soil_temperature_mean * std.math.cbrt(climate_product);
 }
 
 fn ratingForScore(score: f32) []const u8 {
-    if (score > 3.5) return "Highly Suitable";
+    if (score >= 3.5) return "Highly Suitable";
     if (score >= 2.5) return "Suitable";
     if (score >= 1.5) return "Moderately Suitable";
     if (score >= 0.5) return "Slightly Suitable";
@@ -227,10 +229,13 @@ test "ratings cover all boundaries and reject corrupt scores" {
     try std.testing.expectEqualStrings("Slightly Suitable", ratingForScore(0.5));
     try std.testing.expectEqualStrings("Moderately Suitable", ratingForScore(1.5));
     try std.testing.expectEqualStrings("Suitable", ratingForScore(2.5));
-    try std.testing.expectEqualStrings("Highly Suitable", ratingForScore(3.51));
+    try std.testing.expectEqualStrings("Highly Suitable", ratingForScore(3.5));
 
     const all_four: SuitabilityScores = .{ .common_name_id = 0, .township_id = 0, .winter_cold_tolerance_score = 4, .precipitation_suitability_score = 4, .growing_season_score = 4, .drainage_score = 4, .ph_score = 4, .texture_score = 4, .temperature_score = 4 };
     try std.testing.expectEqual(@as(f32, 4), calculateOverallScore(all_four));
+    const half_climate: SuitabilityScores = .{ .common_name_id = 0, .township_id = 0, .winter_cold_tolerance_score = 4, .precipitation_suitability_score = 4, .growing_season_score = 2, .drainage_score = 4, .ph_score = 4, .texture_score = 4, .temperature_score = 4 };
+    try std.testing.expectApproxEqAbs(@as(f32, 4 * std.math.cbrt(@as(f32, 0.5))), calculateOverallScore(half_climate), 0.0001);
+    try std.testing.expectEqualStrings("Slightly Suitable", ratingForScore(1.49));
 
     var accumulator = Accumulator.init(std.testing.allocator);
     defer accumulator.deinit();

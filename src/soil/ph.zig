@@ -63,7 +63,7 @@ pub fn runWithPaths(allocator: std.mem.Allocator, io: std.Io, soil_path: []const
                 crops.ph_minimums[crop_index],
                 crops.ph_maximums[crop_index],
             );
-            const weighted_score = math.roundToOneDecimal(@as(f32, @floatFromInt(base_score)) * soils.multipliers[soil_index]);
+            const weighted_score = @as(f32, @floatFromInt(base_score)) * soils.multipliers[soil_index];
             totals.add(crop_index, township_id, weighted_score);
         }
     }
@@ -97,14 +97,14 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
                 crops.ph_minimums[crop_index],
                 crops.ph_maximums[crop_index],
             );
-            const weighted_score = math.roundToOneDecimal(@as(f32, @floatFromInt(base_score)) * soils.multipliers[soil_index]);
+            const weighted_score = @as(f32, @floatFromInt(base_score)) * soils.multipliers[soil_index];
             totals.add(crop_index, township_id, weighted_score);
         }
     }
 
     for (crops.crop_name_ids, 0..) |crop_name_id, crop_index| {
         for (totals.township_ids.items, 0..) |township_id, township_index| {
-            try final_scores.addScore(strings.get(crop_name_id), strings.get(township_id), .ph, math.roundToOneDecimal(totals.get(crop_index, township_index)));
+            try final_scores.addScore(strings.get(crop_name_id), strings.get(township_id), .ph, totals.get(crop_index, township_index));
         }
     }
 }
@@ -125,7 +125,7 @@ fn loadSoils(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
     }
     while (r.nextRow()) |row| {
         try township_ids.append(allocator, try strings.intern(try row.cell(township_i)));
-        try multipliers.append(allocator, math.roundToTwoDecimals(try row.boundedFloatCell(f32, multiplier_i, "soil_component_area_fraction", 0, 1)));
+        try multipliers.append(allocator, try row.boundedFloatCell(f32, multiplier_i, "soil_component_area_fraction", 0, 1));
         try ph_values.append(allocator, math.roundToTwoDecimals(try row.boundedFloatCell(f32, ph_i, "soil_ph", 0, 14)));
     }
     return .{ .township_ids = try township_ids.toOwnedSlice(allocator), .multipliers = try multipliers.toOwnedSlice(allocator), .ph_values = try ph_values.toOwnedSlice(allocator) };
@@ -163,7 +163,8 @@ fn phSuitabilityScore(ph_value: f32, ph_minimum: f32, ph_maximum: f32) i32 {
     const ph_range = ph_maximum - ph_minimum;
     const ph_mean = 0.5 * (ph_maximum + ph_minimum);
     if (ph_range > 2) return thresholdScore(ph_value, ph_mean, .{ 0.5, 1.0, 1.25, 1.5 });
-    if (ph_range > 1) return thresholdScore(ph_value, ph_mean, .{ 0.5, 0.75, 1.0, 1.25 });
+    // Appendix D, figure 1: a range of exactly 1.0 belongs to the medium class.
+    if (ph_range >= 1) return thresholdScore(ph_value, ph_mean, .{ 0.5, 0.75, 1.0, 1.25 });
     return thresholdScore(ph_value, ph_mean, .{ 0.25, 0.55, 0.75, 0.85 });
 }
 

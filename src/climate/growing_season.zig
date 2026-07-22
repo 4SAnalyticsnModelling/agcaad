@@ -10,7 +10,6 @@ const final_rating = @import("../suitability/final_rating.zig");
 const DailyNormal = struct { township_id: u32, julian_day: i32, max_temperature_quantile_75: f32, min_temperature_quantile_25: f32 };
 const TownshipNormalRange = struct { township_id: u32, start: usize, end: usize };
 const Crop = struct { crop_name_id: u32, is_winter_annual: bool, absolute_minimum_temperature: i32, grow_day_minimum: i32, grow_day_range: i32 };
-const Accumulator = struct { previous_positive_flag_seen: bool = false, growing_season_days: i32 = 0 };
 const Result = struct { crop_name_id: u32, township_id: u32, score: i32 };
 
 pub fn run(allocator: std.mem.Allocator, io: std.Io, input_root_path: []const u8, output_root_path: []const u8) !void {
@@ -119,17 +118,36 @@ fn calculateScoreChunk(
     for (job_start..job_end) |job_index| {
         const crop = crops[job_index / township_ranges.len];
         const township_range = township_ranges[job_index % township_ranges.len];
-        var accumulator: Accumulator = .{};
+        var started = false;
+        var ended = false;
+        var growing_season_days: i32 = 0;
 
         for (normals[township_range.start..township_range.end]) |normal| {
-            const initial_flag = crop.is_winter_annual or (normal.max_temperature_quantile_75 > @as(f32, @floatFromInt(crop.absolute_minimum_temperature)) and normal.min_temperature_quantile_25 > 0);
-            if (initial_flag) accumulator.previous_positive_flag_seen = true;
-            if (accumulator.previous_positive_flag_seen and normal.min_temperature_quantile_25 > 0) {
-                accumulator.growing_season_days += 1;
+            if (crop.is_winter_annual or ended) continue;
+            // Appendix D, equation 6: growing days are the intersection of the
+            // frost-free period and the period whose daily maximum exceeds the
+            // crop absolute minimum. Once either condition ends in fall, the
+            // season cannot restart during a later warm spell.
+            const suitable_day = normal.max_temperature_quantile_75 > @as(f32, @floatFromInt(crop.absolute_minimum_temperature)) and normal.min_temperature_quantile_25 > 0;
+            if (!started) {
+                if (!suitable_day) continue;
+                started = true;
+            } else if (!suitable_day) {
+                // A winter chinook can briefly satisfy both thresholds. Before
+                // midyear, discard such a false start; after midyear it is the
+                // fall end of the frost-free intersection.
+                if (normal.julian_day <= 183) {
+                    started = false;
+                    growing_season_days = 0;
+                } else {
+                    ended = true;
+                }
+                continue;
             }
+            growing_season_days += 1;
         }
 
-        const score = if (crop.is_winter_annual) 4 else growingSeasonScore(accumulator.growing_season_days, crop.grow_day_minimum, crop.grow_day_range);
+        const score = if (crop.is_winter_annual) 4 else growingSeasonScore(growing_season_days, crop.grow_day_minimum, crop.grow_day_range);
         rows[job_index] = .{
             .crop_name_id = crop.crop_name_id,
             .township_id = township_range.township_id,

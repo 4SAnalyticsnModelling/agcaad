@@ -127,7 +127,7 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
 
     for (crop_requirements.crop_name_ids, 0..) |crop_name_id, crop_index| {
         for (result_scores.township_ids.items, 0..) |township_id, township_index| {
-            try final_scores.addScore(string_ids.get(crop_name_id), string_ids.get(township_id), .texture, math.roundToOneDecimal(result_scores.get(crop_index, township_index)));
+            try final_scores.addScore(string_ids.get(crop_name_id), string_ids.get(township_id), .texture, result_scores.get(crop_index, township_index));
         }
     }
 }
@@ -157,7 +157,7 @@ fn loadSoilTextureColumns(
     while (reader.nextRow()) |row| {
         try township_ids.append(allocator, try string_ids.intern(try row.cell(township_column_index)));
         try texture_code_ids.append(allocator, try string_ids.intern(try row.cell(texture_code_column_index)));
-        try soil_series_multipliers.append(allocator, math.roundToTwoDecimals(try row.boundedFloatCell(f32, multiplier_column_index, "soil_component_area_fraction", 0, 1)));
+        try soil_series_multipliers.append(allocator, try row.boundedFloatCell(f32, multiplier_column_index, "soil_component_area_fraction", 0, 1));
     }
 
     return .{
@@ -263,7 +263,7 @@ fn accumulateTextureSuitabilityScores(
                 std.debug.print("Missing texture score mapping for crop '{s}', requirement '{s}', texture code '{s}'\n", .{ string_ids.get(crop_name_id), string_ids.get(crop_texture_requirement_id), string_ids.get(texture_code_id) });
                 return error.MissingSuitabilityMapping;
             };
-            const weighted_score = math.roundToOneDecimal(texture_score * soil_series_multiplier);
+            const weighted_score = texture_score * soil_series_multiplier;
             result_scores.add(crop_row_index, township_id, weighted_score);
         }
     }

@@ -101,7 +101,7 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
 
     for (crops.crop_name_ids, 0..) |crop_name_id, crop_index| {
         for (totals.township_ids.items, 0..) |township_id, township_index| {
-            try final_scores.addScore(strings.get(crop_name_id), strings.get(township_id), .drainage, math.roundToOneDecimal(totals.get(crop_index, township_index)));
+            try final_scores.addScore(strings.get(crop_name_id), strings.get(township_id), .drainage, totals.get(crop_index, township_index));
         }
     }
 }
@@ -126,7 +126,7 @@ fn accumulateScores(allocator: std.mem.Allocator, strings: array_store.StringInt
                 std.debug.print("Missing drainage score mapping for crop '{s}', requirement '{s}', drainage code '{s}'\n", .{ strings.get(crop_name_id), strings.get(requirement_id), strings.get(drainage_code_id) });
                 return error.MissingSuitabilityMapping;
             };
-            const weighted_score = math.roundToOneDecimal(score * soils.multipliers[soil_index]);
+            const weighted_score = score * soils.multipliers[soil_index];
             totals.add(crop_index, township_id, weighted_score);
         }
     }
@@ -149,7 +149,7 @@ fn loadSoils(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
     while (r.nextRow()) |row| {
         try township_ids.append(allocator, try strings.intern(try row.cell(township_i)));
         try drainage_code_ids.append(allocator, try strings.intern(try row.cell(drainage_i)));
-        try multipliers.append(allocator, math.roundToTwoDecimals(try row.boundedFloatCell(f32, multiplier_i, "soil_component_area_fraction", 0, 1)));
+        try multipliers.append(allocator, try row.boundedFloatCell(f32, multiplier_i, "soil_component_area_fraction", 0, 1));
     }
     return .{ .township_ids = try township_ids.toOwnedSlice(allocator), .drainage_code_ids = try drainage_code_ids.toOwnedSlice(allocator), .multipliers = try multipliers.toOwnedSlice(allocator) };
 }
@@ -225,5 +225,7 @@ test "indexed drainage lookup preserves example-derived weighted score" {
     _ = try strings.intern("W");
     _ = try strings.intern("crop");
     try accumulateScores(allocator, strings, soils, crops, keys, &totals);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.9), totals.get(0, 0), 0.001);
+    // Keep the exact 4*0.37 + 1*0.48 component weighting; 1.9 is only its
+    // one-decimal display representation.
+    try std.testing.expectApproxEqAbs(@as(f32, 1.96), totals.get(0, 0), 0.001);
 }

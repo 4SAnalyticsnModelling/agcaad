@@ -172,10 +172,12 @@ fn winterColdToleranceScore(growth_habit: []const u8, critical_minimum: ?f32, to
         std.mem.eql(u8, growth_habit, "Annual/Biennial/Perennial") or
         std.mem.eql(u8, growth_habit, "Annual/Perennial")) return 4;
     const critical = critical_minimum.?;
-    if (township_minimum > critical + 4) return 4;
-    if (township_minimum > critical + 3) return 3;
-    if (township_minimum > critical + 2) return 2;
-    if (township_minimum > critical + 1) return 1;
+    // Appendix D, figure 7: each one-degree band above the critical minimum
+    // advances one class; highly suitable begins above critical + 3 C.
+    if (township_minimum > critical + 3) return 4;
+    if (township_minimum > critical + 2) return 3;
+    if (township_minimum > critical + 1) return 2;
+    if (township_minimum >= critical) return 1;
     return 0;
 }
 
@@ -183,6 +185,10 @@ test "example-derived winter cold scoring" {
     try std.testing.expectEqual(@as(i32, 4), winterColdToleranceScore("Winter Annual", -46, -21.9));
     try std.testing.expectEqual(@as(i32, 4), winterColdToleranceScore("Perennial", null, -21.9));
     try std.testing.expectEqual(@as(i32, 0), winterColdToleranceScore("Perennial", -10, -21.9));
+    try std.testing.expectEqual(@as(i32, 1), winterColdToleranceScore("Perennial", -10, -10));
+    try std.testing.expectEqual(@as(i32, 2), winterColdToleranceScore("Perennial", -10, -8.5));
+    try std.testing.expectEqual(@as(i32, 3), winterColdToleranceScore("Perennial", -10, -7.5));
+    try std.testing.expectEqual(@as(i32, 4), winterColdToleranceScore("Perennial", -10, -6.5));
 }
 
 fn sortRows(_: void, a: Result, b: Result) bool {
