@@ -405,20 +405,3 @@ If no component falls below Suitable, the note is `No major limitation identifie
 ## Combining input domains
 
 The final output contains a crop/township pair only when all seven component scores are present. Pairs that exist entirely in the soil domain but not the climate domain, or entirely in the climate domain but not the soil domain, are reported in a coverage notice and omitted. A partially populated pair within the overlapping domain is an error because calculating with missing components could produce a plausible but false result.
-
-## Required validation for a reproduction
-
-A faithful implementation should stop with an informative error instead of continuing when it encounters:
-
-- a missing required file or column;
-- an empty required value;
-- invalid numeric text, infinity, or NaN;
-- a value outside its physical or score range;
-- crop minimum and maximum thresholds in the wrong order;
-- soil area fractions outside 0 to 1 or a township fraction sum outside `1.0 ± 0.001`;
-- a missing texture or drainage lookup combination;
-- a duplicate component score for the same crop/township pair;
-- a missing daily-temperature township referenced by hourly data; or
-- an incomplete final crop/township record.
-
-Sorting may be used for stable output, and calculations may be parallelized, but neither should alter numeric results. Keep full precision during component aggregation and round only where this specification explicitly requires it.
