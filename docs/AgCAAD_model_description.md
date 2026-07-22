@@ -401,7 +401,3 @@ Each component is independently translated through the same rating thresholds. C
 7. heat.
 
 If no component falls below Suitable, the note is `No major limitation identified`.
-
-## Combining input domains
-
-The final output contains a crop/township pair only when all seven component scores are present. Pairs that exist entirely in the soil domain but not the climate domain, or entirely in the climate domain but not the soil domain, are reported in a coverage notice and omitted. A partially populated pair within the overlapping domain is an error because calculating with missing components could produce a plausible but false result.
