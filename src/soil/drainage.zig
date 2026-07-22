@@ -7,6 +7,7 @@ const reader_mod = @import("../io/delimited_reader.zig");
 const writer_mod = @import("../io/tab_writer.zig");
 const paths_mod = @import("../paths.zig");
 const final_rating = @import("../suitability/final_rating.zig");
+const weights = @import("weights.zig");
 
 const SoilDrainageColumns = struct {
     township_ids: []u32,
@@ -151,6 +152,7 @@ fn loadSoils(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
         try drainage_code_ids.append(allocator, try strings.intern(try row.cell(drainage_i)));
         try multipliers.append(allocator, try row.boundedFloatCell(f32, multiplier_i, "soil_component_area_fraction", 0, 1));
     }
+    try weights.validateAreaFractions(allocator, strings.*, township_ids.items, multipliers.items, path);
     return .{ .township_ids = try township_ids.toOwnedSlice(allocator), .drainage_code_ids = try drainage_code_ids.toOwnedSlice(allocator), .multipliers = try multipliers.toOwnedSlice(allocator) };
 }
 

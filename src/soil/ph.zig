@@ -6,6 +6,7 @@ const reader_mod = @import("../io/delimited_reader.zig");
 const writer_mod = @import("../io/tab_writer.zig");
 const paths_mod = @import("../paths.zig");
 const final_rating = @import("../suitability/final_rating.zig");
+const weights = @import("weights.zig");
 
 const SoilPhColumns = struct {
     township_ids: []u32,
@@ -26,6 +27,15 @@ const CropPhColumns = struct {
         allocator.free(self.crop_name_ids);
         allocator.free(self.ph_minimums);
         allocator.free(self.ph_maximums);
+    }
+};
+
+const MapUnitPhColumns = struct {
+    township_ids: []u32,
+    ph_values: []f32,
+    fn deinit(self: MapUnitPhColumns, allocator: std.mem.Allocator) void {
+        allocator.free(self.township_ids);
+        allocator.free(self.ph_values);
     }
 };
 
@@ -53,18 +63,18 @@ pub fn runWithPaths(allocator: std.mem.Allocator, io: std.Io, soil_path: []const
     defer soils.deinit(allocator);
     const crops = try loadCrops(allocator, io, &strings, crop_path);
     defer crops.deinit(allocator);
-
-    var totals = try score_grid.ScoreGrid.init(allocator, crops.crop_name_ids.len, soils.township_ids);
+    const map_units = try aggregateMapUnitPh(allocator, soils);
+    defer map_units.deinit(allocator);
+    var totals = try score_grid.ScoreGrid.init(allocator, crops.crop_name_ids.len, map_units.township_ids);
     defer totals.deinit();
-    for (soils.township_ids, 0..) |township_id, soil_index| {
+    for (map_units.township_ids, 0..) |township_id, township_index| {
         for (crops.crop_name_ids, 0..) |_, crop_index| {
             const base_score = phSuitabilityScore(
-                soils.ph_values[soil_index],
+                map_units.ph_values[township_index],
                 crops.ph_minimums[crop_index],
                 crops.ph_maximums[crop_index],
             );
-            const weighted_score = @as(f32, @floatFromInt(base_score)) * soils.multipliers[soil_index];
-            totals.add(crop_index, township_id, weighted_score);
+            totals.add(crop_index, township_id, @floatFromInt(base_score));
         }
     }
     try writeResults(allocator, io, strings, crops.crop_name_ids, totals, output_path);
@@ -87,18 +97,18 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     defer soils.deinit(allocator);
     const crops = try loadCrops(allocator, io, &strings, crop_path);
     defer crops.deinit(allocator);
-
-    var totals = try score_grid.ScoreGrid.init(allocator, crops.crop_name_ids.len, soils.township_ids);
+    const map_units = try aggregateMapUnitPh(allocator, soils);
+    defer map_units.deinit(allocator);
+    var totals = try score_grid.ScoreGrid.init(allocator, crops.crop_name_ids.len, map_units.township_ids);
     defer totals.deinit();
-    for (soils.township_ids, 0..) |township_id, soil_index| {
+    for (map_units.township_ids, 0..) |township_id, township_index| {
         for (crops.crop_name_ids, 0..) |_, crop_index| {
             const base_score = phSuitabilityScore(
-                soils.ph_values[soil_index],
+                map_units.ph_values[township_index],
                 crops.ph_minimums[crop_index],
                 crops.ph_maximums[crop_index],
             );
-            const weighted_score = @as(f32, @floatFromInt(base_score)) * soils.multipliers[soil_index];
-            totals.add(crop_index, township_id, weighted_score);
+            totals.add(crop_index, township_id, @floatFromInt(base_score));
         }
     }
 
@@ -128,7 +138,41 @@ fn loadSoils(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
         try multipliers.append(allocator, try row.boundedFloatCell(f32, multiplier_i, "soil_component_area_fraction", 0, 1));
         try ph_values.append(allocator, math.roundToTwoDecimals(try row.boundedFloatCell(f32, ph_i, "soil_ph", 0, 14)));
     }
+    try weights.validateAreaFractions(allocator, strings.*, township_ids.items, multipliers.items, path);
     return .{ .township_ids = try township_ids.toOwnedSlice(allocator), .multipliers = try multipliers.toOwnedSlice(allocator), .ph_values = try ph_values.toOwnedSlice(allocator) };
+}
+
+fn aggregateMapUnitPh(allocator: std.mem.Allocator, soils: SoilPhColumns) !MapUnitPhColumns {
+    var index_by_township = std.AutoHashMap(u32, usize).init(allocator);
+    defer index_by_township.deinit();
+    var township_ids: std.ArrayList(u32) = .empty;
+    var weighted_sums: std.ArrayList(f64) = .empty;
+    var fraction_sums: std.ArrayList(f64) = .empty;
+    errdefer {
+        township_ids.deinit(allocator);
+        weighted_sums.deinit(allocator);
+        fraction_sums.deinit(allocator);
+    }
+    for (soils.township_ids, soils.multipliers, soils.ph_values) |township_id, fraction, ph_value| {
+        const entry = try index_by_township.getOrPut(township_id);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = township_ids.items.len;
+            try township_ids.append(allocator, township_id);
+            try weighted_sums.append(allocator, 0);
+            try fraction_sums.append(allocator, 0);
+        }
+        const index = entry.value_ptr.*;
+        weighted_sums.items[index] += @as(f64, fraction) * @as(f64, ph_value);
+        fraction_sums.items[index] += fraction;
+    }
+    const ph_values = try allocator.alloc(f32, township_ids.items.len);
+    errdefer allocator.free(ph_values);
+    for (ph_values, weighted_sums.items, fraction_sums.items) |*ph_value, weighted_sum, fraction_sum| {
+        ph_value.* = @floatCast(weighted_sum / fraction_sum);
+    }
+    weighted_sums.deinit(allocator);
+    fraction_sums.deinit(allocator);
+    return .{ .township_ids = try township_ids.toOwnedSlice(allocator), .ph_values = ph_values };
 }
 
 fn loadCrops(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.StringInterner, path: []const u8) !CropPhColumns {
@@ -190,4 +234,20 @@ test "example-derived yarrow soil pH scores" {
     // Example requirement range is pH 6-8; the first soil components are 7.5 and 7.1.
     try std.testing.expectEqual(@as(i32, 3), phSuitabilityScore(7.5, 6, 8));
     try std.testing.expectEqual(@as(i32, 4), phSuitabilityScore(7.1, 6, 8));
+}
+
+test "Appendix D equation 1 aggregates pH before classification" {
+    const allocator = std.testing.allocator;
+    const soils: SoilPhColumns = .{
+        .township_ids = @constCast(&[_]u32{ 7, 7 }),
+        .multipliers = @constCast(&[_]f32{ 0.75, 0.25 }),
+        .ph_values = @constCast(&[_]f32{ 6, 8 }),
+    };
+    const map_units = try aggregateMapUnitPh(allocator, soils);
+    defer map_units.deinit(allocator);
+    try std.testing.expectEqualSlices(u32, &.{7}, map_units.township_ids);
+    try std.testing.expectApproxEqAbs(@as(f32, 6.5), map_units.ph_values[0], 0.0001);
+    // Both components individually sit on strict class boundaries and would
+    // average to 1; the map-unit pH is 6.5 and correctly scores 3.
+    try std.testing.expectEqual(@as(i32, 3), phSuitabilityScore(map_units.ph_values[0], 6, 8));
 }

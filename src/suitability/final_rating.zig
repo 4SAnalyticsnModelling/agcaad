@@ -182,9 +182,10 @@ fn writeFinalRatings(allocator: std.mem.Allocator, io: std.Io, strings: array_st
 fn calculateOverallScore(scores: SuitabilityScores) f32 {
     const soil_temperature_mean = (scores.temperature_score + scores.texture_score + scores.drainage_score + scores.ph_score) / 4.0;
     const climate_product = (scores.precipitation_suitability_score * scores.growing_season_score * scores.winter_cold_tolerance_score) / 64.0;
-    // Appendix D, figure 6. The printed "0.3" denotes a cube root; retain
-    // full precision here so the rating is not changed by display rounding.
-    return soil_temperature_mean * std.math.cbrt(climate_product);
+    // Appendix D, figure 6. The printed "0.3" denotes a cube root. The 2020
+    // production model rounds the resulting reported score to one decimal
+    // before assigning its published rating class.
+    return math.roundToOneDecimal(soil_temperature_mean * std.math.cbrt(climate_product));
 }
 
 fn ratingForScore(score: f32) []const u8 {
@@ -234,7 +235,7 @@ test "ratings cover all boundaries and reject corrupt scores" {
     const all_four: SuitabilityScores = .{ .common_name_id = 0, .township_id = 0, .winter_cold_tolerance_score = 4, .precipitation_suitability_score = 4, .growing_season_score = 4, .drainage_score = 4, .ph_score = 4, .texture_score = 4, .temperature_score = 4 };
     try std.testing.expectEqual(@as(f32, 4), calculateOverallScore(all_four));
     const half_climate: SuitabilityScores = .{ .common_name_id = 0, .township_id = 0, .winter_cold_tolerance_score = 4, .precipitation_suitability_score = 4, .growing_season_score = 2, .drainage_score = 4, .ph_score = 4, .texture_score = 4, .temperature_score = 4 };
-    try std.testing.expectApproxEqAbs(@as(f32, 4 * std.math.cbrt(@as(f32, 0.5))), calculateOverallScore(half_climate), 0.0001);
+    try std.testing.expectEqual(@as(f32, 3.2), calculateOverallScore(half_climate));
     try std.testing.expectEqualStrings("Slightly Suitable", ratingForScore(1.49));
 
     var accumulator = Accumulator.init(std.testing.allocator);

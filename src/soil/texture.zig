@@ -7,6 +7,7 @@ const delimited_reader = @import("../io/delimited_reader.zig");
 const tab_writer = @import("../io/tab_writer.zig");
 const paths_mod = @import("../paths.zig");
 const final_rating = @import("../suitability/final_rating.zig");
+const weights = @import("weights.zig");
 
 const SoilTextureColumns = struct {
     township_ids: []u32,
@@ -159,6 +160,8 @@ fn loadSoilTextureColumns(
         try texture_code_ids.append(allocator, try string_ids.intern(try row.cell(texture_code_column_index)));
         try soil_series_multipliers.append(allocator, try row.boundedFloatCell(f32, multiplier_column_index, "soil_component_area_fraction", 0, 1));
     }
+
+    try weights.validateAreaFractions(allocator, string_ids.*, township_ids.items, soil_series_multipliers.items, reader.path);
 
     return .{
         .township_ids = try township_ids.toOwnedSlice(allocator),

@@ -193,6 +193,39 @@ test "example-derived wheatgrass precipitation thresholds" {
     try std.testing.expectEqual(@as(i32, 0), precipitationSuitabilityScore(991, 150, 450));
 }
 
+test "Appendix D wide precipitation boundaries match the production model" {
+    // Requirement 150-450 mm, range 300 mm. Check both sides of every class.
+    try std.testing.expectEqual(@as(i32, 0), precipitationSuitabilityScore(-201, 150, 450));
+    try std.testing.expectEqual(@as(i32, 1), precipitationSuitabilityScore(-200, 150, 450));
+    try std.testing.expectEqual(@as(i32, 1), precipitationSuitabilityScore(-1, 150, 450));
+    try std.testing.expectEqual(@as(i32, 2), precipitationSuitabilityScore(0, 150, 450));
+    try std.testing.expectEqual(@as(i32, 2), precipitationSuitabilityScore(149, 150, 450));
+    try std.testing.expectEqual(@as(i32, 3), precipitationSuitabilityScore(150, 150, 450));
+    try std.testing.expectEqual(@as(i32, 4), precipitationSuitabilityScore(250, 150, 450));
+    try std.testing.expectEqual(@as(i32, 4), precipitationSuitabilityScore(825, 150, 450));
+    try std.testing.expectEqual(@as(i32, 2), precipitationSuitabilityScore(826, 150, 450));
+    try std.testing.expectEqual(@as(i32, 2), precipitationSuitabilityScore(930, 150, 450));
+    try std.testing.expectEqual(@as(i32, 1), precipitationSuitabilityScore(931, 150, 450));
+    try std.testing.expectEqual(@as(i32, 1), precipitationSuitabilityScore(990, 150, 450));
+    try std.testing.expectEqual(@as(i32, 0), precipitationSuitabilityScore(991, 150, 450));
+}
+
+test "Appendix D narrow precipitation boundaries match the production model" {
+    // Requirement 300-500 mm, range 200 mm.
+    try std.testing.expectEqual(@as(i32, 0), precipitationSuitabilityScore(166, 300, 500));
+    try std.testing.expectEqual(@as(i32, 1), precipitationSuitabilityScore(167, 300, 500));
+    try std.testing.expectEqual(@as(i32, 1), precipitationSuitabilityScore(233, 300, 500));
+    try std.testing.expectEqual(@as(i32, 2), precipitationSuitabilityScore(234, 300, 500));
+    try std.testing.expectEqual(@as(i32, 3), precipitationSuitabilityScore(300, 300, 500));
+    try std.testing.expectEqual(@as(i32, 4), precipitationSuitabilityScore(367, 300, 500));
+    try std.testing.expectEqual(@as(i32, 4), precipitationSuitabilityScore(850, 300, 500));
+    try std.testing.expectEqual(@as(i32, 2), precipitationSuitabilityScore(851, 300, 500));
+    try std.testing.expectEqual(@as(i32, 2), precipitationSuitabilityScore(980, 300, 500));
+    try std.testing.expectEqual(@as(i32, 1), precipitationSuitabilityScore(981, 300, 500));
+    try std.testing.expectEqual(@as(i32, 1), precipitationSuitabilityScore(1100, 300, 500));
+    try std.testing.expectEqual(@as(i32, 0), precipitationSuitabilityScore(1101, 300, 500));
+}
+
 fn sortRows(_: void, a: Result, b: Result) bool {
     if (a.crop_name_id == b.crop_name_id) return a.township_id < b.township_id;
     return a.crop_name_id < b.crop_name_id;
