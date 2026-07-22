@@ -110,6 +110,7 @@ test {
     _ = @import("core/math.zig");
     _ = @import("core/packed_key.zig");
     _ = @import("core/parallel.zig");
+    _ = @import("core/score_grid.zig");
     _ = @import("soil/drainage.zig");
     _ = @import("soil/ph.zig");
     _ = @import("suitability/final_rating.zig");

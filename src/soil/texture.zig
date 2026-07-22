@@ -2,6 +2,7 @@ const std = @import("std");
 const array_store = @import("../core/array_store.zig");
 const math = @import("../core/math.zig");
 const packed_key = @import("../core/packed_key.zig");
+const score_grid = @import("../core/score_grid.zig");
 const delimited_reader = @import("../io/delimited_reader.zig");
 const tab_writer = @import("../io/tab_writer.zig");
 const paths_mod = @import("../paths.zig");
@@ -39,12 +40,6 @@ const TextureScoreKeyColumns = struct {
         allocator.free(self.texture_code_ids);
         allocator.free(self.texture_scores);
     }
-};
-
-const TextureSuitabilityResult = struct {
-    crop_name_id: u32,
-    township_id: u32,
-    weighted_texture_score: f32,
 };
 
 pub fn run(allocator: std.mem.Allocator, io: std.Io, input_root_path: []const u8, output_root_path: []const u8) !void {
@@ -87,7 +82,7 @@ pub fn runWithPaths(
     const texture_score_keys = try loadTextureScoreKeyColumns(allocator, io, &string_ids, texture_score_key_path);
     defer texture_score_keys.deinit(allocator);
 
-    var result_scores = std.AutoHashMap(u64, f32).init(allocator);
+    var result_scores = try score_grid.ScoreGrid.init(allocator, crop_requirements.crop_name_ids.len, soil_textures.township_ids);
     defer result_scores.deinit();
 
     try accumulateTextureSuitabilityScores(
@@ -98,7 +93,7 @@ pub fn runWithPaths(
         &result_scores,
     );
 
-    try writeTextureSuitabilityScores(allocator, io, string_ids, result_scores, texture_output_path);
+    try writeTextureSuitabilityScores(allocator, io, string_ids, crop_requirements.crop_name_ids, result_scores, texture_output_path);
 }
 
 pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_root_path: []const u8, final_scores: *final_rating.Accumulator) !void {
@@ -126,19 +121,14 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     const texture_score_keys = try loadTextureScoreKeyColumns(allocator, io, &string_ids, texture_score_key_path);
     defer texture_score_keys.deinit(allocator);
 
-    var result_scores = std.AutoHashMap(u64, f32).init(allocator);
+    var result_scores = try score_grid.ScoreGrid.init(allocator, crop_requirements.crop_name_ids.len, soil_textures.township_ids);
     defer result_scores.deinit();
     try accumulateTextureSuitabilityScores(string_ids, soil_textures, crop_requirements, texture_score_keys, &result_scores);
 
-    var it = result_scores.iterator();
-    while (it.next()) |entry| {
-        const ids = packed_key.unpack(entry.key_ptr.*);
-        try final_scores.addScore(
-            string_ids.get(ids.first),
-            string_ids.get(ids.second),
-            .texture,
-            math.roundToOneDecimal(entry.value_ptr.*),
-        );
+    for (crop_requirements.crop_name_ids, 0..) |crop_name_id, crop_index| {
+        for (result_scores.township_ids.items, 0..) |township_id, township_index| {
+            try final_scores.addScore(string_ids.get(crop_name_id), string_ids.get(township_id), .texture, math.roundToOneDecimal(result_scores.get(crop_index, township_index)));
+        }
     }
 }
 
@@ -249,7 +239,7 @@ fn accumulateTextureSuitabilityScores(
     soil_textures: SoilTextureColumns,
     crop_requirements: CropTextureRequirementColumns,
     texture_score_keys: TextureScoreKeyColumns,
-    result_scores: *std.AutoHashMap(u64, f32),
+    result_scores: *score_grid.ScoreGrid,
 ) !void {
     var score_by_requirement_texture = std.AutoHashMap(u64, f32).init(result_scores.allocator);
     defer score_by_requirement_texture.deinit();
@@ -273,10 +263,8 @@ fn accumulateTextureSuitabilityScores(
                 std.debug.print("Missing texture score mapping for crop '{s}', requirement '{s}', texture code '{s}'\n", .{ string_ids.get(crop_name_id), string_ids.get(crop_texture_requirement_id), string_ids.get(texture_code_id) });
                 return error.MissingSuitabilityMapping;
             };
-            const packed_result_key = packed_key.pack(crop_name_id, township_id);
             const weighted_score = math.roundToOneDecimal(texture_score * soil_series_multiplier);
-            const entry = try result_scores.getOrPut(packed_result_key);
-            if (entry.found_existing) entry.value_ptr.* += weighted_score else entry.value_ptr.* = weighted_score;
+            result_scores.add(crop_row_index, township_id, weighted_score);
         }
     }
 }
@@ -285,39 +273,20 @@ fn writeTextureSuitabilityScores(
     allocator: std.mem.Allocator,
     io: std.Io,
     string_ids: array_store.StringInterner,
-    result_scores: std.AutoHashMap(u64, f32),
+    crop_name_ids: []const u32,
+    result_scores: score_grid.ScoreGrid,
     texture_output_path: []const u8,
 ) !void {
-    var output_rows: std.ArrayList(TextureSuitabilityResult) = .empty;
-    defer output_rows.deinit(allocator);
-
-    var result_iterator = result_scores.iterator();
-    while (result_iterator.next()) |entry| {
-        const unpacked_key = packed_key.unpack(entry.key_ptr.*);
-        try output_rows.append(allocator, .{
-            .crop_name_id = unpacked_key.first,
-            .township_id = unpacked_key.second,
-            .weighted_texture_score = math.roundToOneDecimal(entry.value_ptr.*),
-        });
-    }
-
-    std.mem.sort(TextureSuitabilityResult, output_rows.items, {}, sortTextureSuitabilityResult);
-
     var output = try tab_writer.Writer.create(allocator, io, texture_output_path);
     defer output.close();
     try output.writeAll("crop_common_name\ttownship_id\tsoil_texture_suitability_score\n");
 
-    for (output_rows.items) |row| {
+    for (crop_name_ids, 0..) |crop_name_id, crop_index| for (result_scores.township_ids.items, 0..) |township_id, township_index| {
         try output.print("{s}\t{s}\t{d:.1}\n", .{
-            string_ids.get(row.crop_name_id),
-            string_ids.get(row.township_id),
-            row.weighted_texture_score,
+            string_ids.get(crop_name_id),
+            string_ids.get(township_id),
+            math.roundToOneDecimal(result_scores.get(crop_index, township_index)),
         });
-    }
+    };
     try output.flush();
-}
-
-fn sortTextureSuitabilityResult(_: void, left: TextureSuitabilityResult, right: TextureSuitabilityResult) bool {
-    if (left.crop_name_id == right.crop_name_id) return left.township_id < right.township_id;
-    return left.crop_name_id < right.crop_name_id;
 }

@@ -1,7 +1,7 @@
 const std = @import("std");
 const array_store = @import("../core/array_store.zig");
 const math = @import("../core/math.zig");
-const packed_key = @import("../core/packed_key.zig");
+const score_grid = @import("../core/score_grid.zig");
 const reader_mod = @import("../io/delimited_reader.zig");
 const writer_mod = @import("../io/tab_writer.zig");
 const paths_mod = @import("../paths.zig");
@@ -29,8 +29,6 @@ const CropPhColumns = struct {
     }
 };
 
-const PhResult = struct { crop_name_id: u32, township_id: u32, ph_score: f32 };
-
 pub fn run(allocator: std.mem.Allocator, io: std.Io, input_root_path: []const u8, output_root_path: []const u8) !void {
     const input_paths = paths_mod.Paths.init(input_root_path);
     const output_paths = paths_mod.Paths.init(output_root_path);
@@ -56,21 +54,20 @@ pub fn runWithPaths(allocator: std.mem.Allocator, io: std.Io, soil_path: []const
     const crops = try loadCrops(allocator, io, &strings, crop_path);
     defer crops.deinit(allocator);
 
-    var totals = std.AutoHashMap(u64, f32).init(allocator);
+    var totals = try score_grid.ScoreGrid.init(allocator, crops.crop_name_ids.len, soils.township_ids);
     defer totals.deinit();
     for (soils.township_ids, 0..) |township_id, soil_index| {
-        for (crops.crop_name_ids, 0..) |crop_name_id, crop_index| {
+        for (crops.crop_name_ids, 0..) |_, crop_index| {
             const base_score = phSuitabilityScore(
                 soils.ph_values[soil_index],
                 crops.ph_minimums[crop_index],
                 crops.ph_maximums[crop_index],
             );
             const weighted_score = math.roundToOneDecimal(@as(f32, @floatFromInt(base_score)) * soils.multipliers[soil_index]);
-            const entry = try totals.getOrPut(packed_key.pack(crop_name_id, township_id));
-            if (entry.found_existing) entry.value_ptr.* += weighted_score else entry.value_ptr.* = weighted_score;
+            totals.add(crop_index, township_id, weighted_score);
         }
     }
-    try writeResults(allocator, io, strings, totals, output_path);
+    try writeResults(allocator, io, strings, crops.crop_name_ids, totals, output_path);
 }
 
 pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_root_path: []const u8, final_scores: *final_rating.Accumulator) !void {
@@ -91,25 +88,24 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     const crops = try loadCrops(allocator, io, &strings, crop_path);
     defer crops.deinit(allocator);
 
-    var totals = std.AutoHashMap(u64, f32).init(allocator);
+    var totals = try score_grid.ScoreGrid.init(allocator, crops.crop_name_ids.len, soils.township_ids);
     defer totals.deinit();
     for (soils.township_ids, 0..) |township_id, soil_index| {
-        for (crops.crop_name_ids, 0..) |crop_name_id, crop_index| {
+        for (crops.crop_name_ids, 0..) |_, crop_index| {
             const base_score = phSuitabilityScore(
                 soils.ph_values[soil_index],
                 crops.ph_minimums[crop_index],
                 crops.ph_maximums[crop_index],
             );
             const weighted_score = math.roundToOneDecimal(@as(f32, @floatFromInt(base_score)) * soils.multipliers[soil_index]);
-            const entry = try totals.getOrPut(packed_key.pack(crop_name_id, township_id));
-            if (entry.found_existing) entry.value_ptr.* += weighted_score else entry.value_ptr.* = weighted_score;
+            totals.add(crop_index, township_id, weighted_score);
         }
     }
 
-    var it = totals.iterator();
-    while (it.next()) |entry| {
-        const ids = packed_key.unpack(entry.key_ptr.*);
-        try final_scores.addScore(strings.get(ids.first), strings.get(ids.second), .ph, math.roundToOneDecimal(entry.value_ptr.*));
+    for (crops.crop_name_ids, 0..) |crop_name_id, crop_index| {
+        for (totals.township_ids.items, 0..) |township_id, township_index| {
+            try final_scores.addScore(strings.get(crop_name_id), strings.get(township_id), .ph, math.roundToOneDecimal(totals.get(crop_index, township_index)));
+        }
     }
 }
 
@@ -179,24 +175,14 @@ fn thresholdScore(value: f32, center: f32, thresholds: [4]f32) i32 {
     return 0;
 }
 
-fn writeResults(allocator: std.mem.Allocator, io: std.Io, strings: array_store.StringInterner, totals: std.AutoHashMap(u64, f32), output_path: []const u8) !void {
-    var rows: std.ArrayList(PhResult) = .empty;
-    defer rows.deinit(allocator);
-    var it = totals.iterator();
-    while (it.next()) |entry| {
-        const ids = packed_key.unpack(entry.key_ptr.*);
-        try rows.append(allocator, .{ .crop_name_id = ids.first, .township_id = ids.second, .ph_score = math.roundToOneDecimal(entry.value_ptr.*) });
-    }
-    std.mem.sort(PhResult, rows.items, {}, sortRows);
+fn writeResults(allocator: std.mem.Allocator, io: std.Io, strings: array_store.StringInterner, crop_name_ids: []const u32, totals: score_grid.ScoreGrid, output_path: []const u8) !void {
     var output = try writer_mod.Writer.create(allocator, io, output_path);
     defer output.close();
     try output.writeAll("crop_common_name\ttownship_id\tsoil_ph_suitability_score\n");
-    for (rows.items) |row| try output.print("{s}\t{s}\t{d:.1}\n", .{ strings.get(row.crop_name_id), strings.get(row.township_id), row.ph_score });
+    for (crop_name_ids, 0..) |crop_name_id, crop_index| for (totals.township_ids.items, 0..) |township_id, township_index| {
+        try output.print("{s}\t{s}\t{d:.1}\n", .{ strings.get(crop_name_id), strings.get(township_id), math.roundToOneDecimal(totals.get(crop_index, township_index)) });
+    };
     try output.flush();
-}
-
-fn sortRows(_: void, a: PhResult, b: PhResult) bool {
-    return if (a.crop_name_id == b.crop_name_id) a.township_id < b.township_id else a.crop_name_id < b.crop_name_id;
 }
 
 test "example-derived yarrow soil pH scores" {
