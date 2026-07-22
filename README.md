@@ -6,6 +6,8 @@
 The **Agriculture Crop Adaptation Atlas and Database (AgCAAD)** is used to rate the suitability of Alberta agricultural land for annual crop production from weather and soil information. 
 The AgCAAD model evaluates crop suitability across Alberta townships using climate heat supply, moisture supply, soil physical conditions, soil chemical conditions, and drainage. 
 
+For a plain-language, reproducible explanation of the model, see [AgCAAD model description](docs/AgCAAD_model_description.md).
+
 ## Model Components
 
 AgCAAD evaluates crop suitability from these component groups:
@@ -99,8 +101,6 @@ examples/
 Temperature-suitability growing days are calculated for all crops from the daily temperature normals; no precomputed crop-day files are required. Input folders should contain only the input `.txt` files. Nested input folders are not used.
 
 The calculations follow *Appendix D: Model to Determine Suitability of a Region for a Large Number of Crops* (2004). In particular, optimum hourly temperature has score 5 (the prose reference to a 0-4 temperature scale is a typo), the final climatic multiplier is a cube root, winter-annual planting/harvest and dormancy use the specified 25th/75th-percentile daily thresholds, and soil component weights retain full precision until output formatting.
-
-For a plain-language, reproducible specification of every calculation, see [docs/MODEL.md](docs/MODEL.md).
 
 ## Input Validation and Diagnostics
 
