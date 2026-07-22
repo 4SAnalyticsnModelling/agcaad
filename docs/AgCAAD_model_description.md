@@ -12,6 +12,8 @@ AgCAAD estimates how suitable each township is for each crop under rainfed or dr
 - growing-season length; and
 - winter cold tolerance.
 
+The current model was developed using Alberta townships as its geographic units. However, the method can be extended to other provinces and jurisdictions and applied at different geographic levels, such as quarter sections, sections, townships, counties, or municipalities. The geographic resolution used in an application depends on the availability of the climate normals and soil data required as model inputs at that same resolution.
+
 The result is a numeric score and one of five plain-language ratings. This document describes the implemented model precisely enough to reproduce it in another programming language.
 
 ## Basic concepts
