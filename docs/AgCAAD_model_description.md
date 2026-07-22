@@ -236,6 +236,8 @@ Assign 4 immediately if the critical minimum is blank or if `growth_habit` is ex
 - `Annual/Biennial/Perennial`
 - `Annual/Perennial`
 
+These are exact category names, not a general exemption for every biennial or perennial. The composite categories identify crops that the model treats as annual production systems—for example, a perennial species grown and harvested as an annual—so winter survival is not considered limiting. Crops labelled simply `Biennial`, `Biennial/Perennial`, or `Perennial` are evaluated against their critical winter minimum using the table below.
+
 Otherwise:
 
 | Score | Condition |
