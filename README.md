@@ -100,8 +100,6 @@ Temperature-suitability growing days are calculated for all crops from the daily
 
 The calculations follow *Appendix D: Model to Determine Suitability of a Region for a Large Number of Crops* (2004). In particular, optimum hourly temperature has score 5 (the prose reference to a 0-4 temperature scale is a typo), the final climatic multiplier is a cube root, winter-annual planting/harvest and dormancy use the specified 25th/75th-percentile daily thresholds, and soil component weights retain full precision until output formatting.
 
-See [SCIENTIFIC_VALIDATION.md](SCIENTIFIC_VALIDATION.md) for the rule-by-rule evidence, production-model reconciliation, and remaining limits.
-
 ## Input Validation and Diagnostics
 
 AgCAAD validates required files and columns, numeric syntax, finite values, physical ranges, crop threshold ordering, score-key coverage, duplicate scores, and completeness across overlapping soil and climate data. Invalid input stops the run with the failing stage and, when applicable, the filename, row, column, and offending value. Crop/township pairs wholly outside either the soil or climate coverage are reported as a coverage notice and omitted; partially populated overlapping pairs are treated as errors.
