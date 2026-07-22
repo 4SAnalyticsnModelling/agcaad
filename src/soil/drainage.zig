@@ -68,19 +68,7 @@ pub fn runWithPaths(allocator: std.mem.Allocator, io: std.Io, soil_path: []const
     defer keys.deinit(allocator);
     var totals = std.AutoHashMap(u64, f32).init(allocator);
     defer totals.deinit();
-    for (soils.township_ids, 0..) |township_id, soil_index| {
-        const drainage_code_id = soils.drainage_code_ids[soil_index];
-        for (crops.crop_name_ids, 0..) |crop_name_id, crop_index| {
-            const requirement_id = crops.drainage_requirement_ids[crop_index];
-            for (keys.scores, 0..) |score, key_index| {
-                if (keys.drainage_requirement_ids[key_index] != requirement_id) continue;
-                if (keys.drainage_code_ids[key_index] != drainage_code_id) continue;
-                const weighted_score = math.roundToOneDecimal(score * soils.multipliers[soil_index]);
-                const entry = try totals.getOrPut(packed_key.pack(crop_name_id, township_id));
-                if (entry.found_existing) entry.value_ptr.* += weighted_score else entry.value_ptr.* = weighted_score;
-            }
-        }
-    }
+    try accumulateScores(allocator, soils, crops, keys, &totals);
     try writeResults(allocator, io, strings, totals, output_path);
 }
 
@@ -110,24 +98,31 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
 
     var totals = std.AutoHashMap(u64, f32).init(allocator);
     defer totals.deinit();
-    for (soils.township_ids, 0..) |township_id, soil_index| {
-        const drainage_code_id = soils.drainage_code_ids[soil_index];
-        for (crops.crop_name_ids, 0..) |crop_name_id, crop_index| {
-            const requirement_id = crops.drainage_requirement_ids[crop_index];
-            for (keys.scores, 0..) |score, key_index| {
-                if (keys.drainage_requirement_ids[key_index] != requirement_id) continue;
-                if (keys.drainage_code_ids[key_index] != drainage_code_id) continue;
-                const weighted_score = math.roundToOneDecimal(score * soils.multipliers[soil_index]);
-                const entry = try totals.getOrPut(packed_key.pack(crop_name_id, township_id));
-                if (entry.found_existing) entry.value_ptr.* += weighted_score else entry.value_ptr.* = weighted_score;
-            }
-        }
-    }
+    try accumulateScores(allocator, soils, crops, keys, &totals);
 
     var it = totals.iterator();
     while (it.next()) |entry| {
         const ids = packed_key.unpack(entry.key_ptr.*);
         try final_scores.addScore(strings.get(ids.first), strings.get(ids.second), .drainage, math.roundToOneDecimal(entry.value_ptr.*));
+    }
+}
+
+fn accumulateScores(allocator: std.mem.Allocator, soils: SoilDrainageColumns, crops: CropDrainageColumns, keys: DrainageKeyColumns, totals: *std.AutoHashMap(u64, f32)) !void {
+    var score_by_requirement_drainage = std.AutoHashMap(u64, f32).init(allocator);
+    defer score_by_requirement_drainage.deinit();
+    try score_by_requirement_drainage.ensureTotalCapacity(@intCast(keys.scores.len));
+    for (keys.scores, 0..) |score, key_index| {
+        try score_by_requirement_drainage.put(packed_key.pack(keys.drainage_requirement_ids[key_index], keys.drainage_code_ids[key_index]), score);
+    }
+    for (soils.township_ids, 0..) |township_id, soil_index| {
+        const drainage_code_id = soils.drainage_code_ids[soil_index];
+        for (crops.crop_name_ids, 0..) |crop_name_id, crop_index| {
+            const requirement_id = crops.drainage_requirement_ids[crop_index];
+            const score = score_by_requirement_drainage.get(packed_key.pack(requirement_id, drainage_code_id)) orelse continue;
+            const weighted_score = math.roundToOneDecimal(score * soils.multipliers[soil_index]);
+            const entry = try totals.getOrPut(packed_key.pack(crop_name_id, township_id));
+            if (entry.found_existing) entry.value_ptr.* += weighted_score else entry.value_ptr.* = weighted_score;
+        }
     }
 }
 
@@ -206,7 +201,7 @@ fn writeResults(allocator: std.mem.Allocator, io: std.Io, strings: array_store.S
         try rows.append(allocator, .{ .crop_name_id = ids.first, .township_id = ids.second, .drainage_score = math.roundToOneDecimal(entry.value_ptr.*) });
     }
     std.mem.sort(DrainageResult, rows.items, {}, sortRows);
-    var output = writer_mod.Writer.create(allocator, io, output_path);
+    var output = try writer_mod.Writer.create(allocator, io, output_path);
     defer output.close();
     try output.writeAll("crop_common_name\ttownship_id\tsoil_drainage_suitability_score\n");
     for (rows.items) |row| try output.print("{s}\t{s}\t{d:.1}\n", .{ strings.get(row.crop_name_id), strings.get(row.township_id), row.drainage_score });
@@ -215,4 +210,19 @@ fn writeResults(allocator: std.mem.Allocator, io: std.Io, strings: array_store.S
 
 fn sortRows(_: void, a: DrainageResult, b: DrainageResult) bool {
     return if (a.crop_name_id == b.crop_name_id) a.township_id < b.township_id else a.crop_name_id < b.crop_name_id;
+}
+
+test "indexed drainage lookup preserves example-derived weighted score" {
+    const allocator = std.testing.allocator;
+    const soils: SoilDrainageColumns = .{
+        .township_ids = @constCast(&[_]u32{ 1, 1 }),
+        .drainage_code_ids = @constCast(&[_]u32{ 2, 2 }),
+        .multipliers = @constCast(&[_]f32{ 0.41, 0.08 }),
+    };
+    const crops: CropDrainageColumns = .{ .crop_name_ids = @constCast(&[_]u32{3}), .drainage_requirement_ids = @constCast(&[_]u32{2}) };
+    const keys: DrainageKeyColumns = .{ .drainage_requirement_ids = @constCast(&[_]u32{2}), .drainage_code_ids = @constCast(&[_]u32{2}), .scores = @constCast(&[_]f32{4}) };
+    var totals = std.AutoHashMap(u64, f32).init(allocator);
+    defer totals.deinit();
+    try accumulateScores(allocator, soils, crops, keys, &totals);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.9), totals.get(packed_key.pack(3, 1)).?, 0.001);
 }

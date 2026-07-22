@@ -36,7 +36,7 @@ pub fn runWithPaths(allocator: std.mem.Allocator, io: std.Io, winter_path: []con
     const rows = try calculateScoresParallel(allocator, strings, crops, townships);
     defer allocator.free(rows);
     std.mem.sort(Result, rows, {}, sortRows);
-    var output = writer_mod.Writer.create(allocator, io, output_path);
+    var output = try writer_mod.Writer.create(allocator, io, output_path);
     defer output.close();
     try output.writeAll("crop_common_name\ttownship_id\twinter_cold_tolerance_score\n");
     for (rows) |row| try output.print("{s}\t{s}\t{d}\n", .{ strings.get(row.crop_name_id), strings.get(row.township_id), row.score });
@@ -84,6 +84,10 @@ fn calculateScoresParallel(
     errdefer allocator.free(rows);
     const workers = parallel.workerCount(total_count);
     if (workers == 0) return rows;
+    if (workers == 1) {
+        calculateScoreChunk(strings, crops, townships, rows, 0, total_count);
+        return rows;
+    }
     const threads = try allocator.alloc(std.Thread, workers);
     defer allocator.free(threads);
     for (threads, 0..) |*thread, worker_index| {

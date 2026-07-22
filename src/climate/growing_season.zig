@@ -8,7 +8,7 @@ const final_rating = @import("../suitability/final_rating.zig");
 
 const DailyNormal = struct { township_id: u32, julian_day: i32, max_temperature_quantile_75: f32, min_temperature_quantile_25: f32 };
 const TownshipNormalRange = struct { township_id: u32, start: usize, end: usize };
-const Crop = struct { crop_name_id: u32, growth_habit_id: u32, absolute_minimum_temperature: i32, grow_day_minimum: i32, grow_day_range: i32 };
+const Crop = struct { crop_name_id: u32, is_winter_annual: bool, absolute_minimum_temperature: i32, grow_day_minimum: i32, grow_day_range: i32 };
 const Accumulator = struct { previous_positive_flag_seen: bool = false, growing_season_days: i32 = 0 };
 const Result = struct { crop_name_id: u32, township_id: u32, score: i32 };
 
@@ -35,7 +35,7 @@ pub fn runWithPaths(allocator: std.mem.Allocator, io: std.Io, normals_path: []co
     defer allocator.free(normals);
     const crops = try loadCrops(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
-    const rows = try calculateScoresParallel(allocator, strings, normals, crops);
+    const rows = try calculateScoresParallel(allocator, normals, crops);
     defer allocator.free(rows);
     try writeScores(allocator, io, strings, rows, output_path);
 }
@@ -58,7 +58,7 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     const crops = try loadCrops(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
 
-    const rows = try calculateScoresParallel(allocator, strings, normals, crops);
+    const rows = try calculateScoresParallel(allocator, normals, crops);
     defer allocator.free(rows);
     for (rows) |row| {
         try final_scores.addScore(strings.get(row.crop_name_id), strings.get(row.township_id), .growing_season, @floatFromInt(row.score));
@@ -67,7 +67,6 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
 
 fn calculateScoresParallel(
     allocator: std.mem.Allocator,
-    strings: array_store.StringInterner,
     normals: []const DailyNormal,
     crops: []const Crop,
 ) ![]Result {
@@ -78,12 +77,15 @@ fn calculateScoresParallel(
     errdefer allocator.free(rows);
     const workers = parallel.workerCount(total_jobs);
     if (workers == 0) return rows;
+    if (workers == 1) {
+        calculateScoreChunk(normals, township_ranges, crops, rows, 0, total_jobs);
+        return rows;
+    }
 
     const threads = try allocator.alloc(std.Thread, workers);
     defer allocator.free(threads);
     for (threads, 0..) |*thread, worker_index| {
         thread.* = try std.Thread.spawn(.{}, calculateScoreChunk, .{
-            strings,
             normals,
             township_ranges,
             crops,
@@ -97,7 +99,6 @@ fn calculateScoresParallel(
 }
 
 fn calculateScoreChunk(
-    strings: array_store.StringInterner,
     normals: []const DailyNormal,
     township_ranges: []const TownshipNormalRange,
     crops: []const Crop,
@@ -111,15 +112,14 @@ fn calculateScoreChunk(
         var accumulator: Accumulator = .{};
 
         for (normals[township_range.start..township_range.end]) |normal| {
-            const is_winter_annual = std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual");
-            const initial_flag = is_winter_annual or (normal.max_temperature_quantile_75 > @as(f32, @floatFromInt(crop.absolute_minimum_temperature)) and normal.min_temperature_quantile_25 > 0);
+            const initial_flag = crop.is_winter_annual or (normal.max_temperature_quantile_75 > @as(f32, @floatFromInt(crop.absolute_minimum_temperature)) and normal.min_temperature_quantile_25 > 0);
             if (initial_flag) accumulator.previous_positive_flag_seen = true;
             if (accumulator.previous_positive_flag_seen and normal.min_temperature_quantile_25 > 0) {
                 accumulator.growing_season_days += 1;
             }
         }
 
-        const score = if (std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual")) 4 else growingSeasonScore(accumulator.growing_season_days, crop.grow_day_minimum, crop.grow_day_range);
+        const score = if (crop.is_winter_annual) 4 else growingSeasonScore(accumulator.growing_season_days, crop.grow_day_minimum, crop.grow_day_range);
         rows[job_index] = .{
             .crop_name_id = crop.crop_name_id,
             .township_id = township_range.township_id,
@@ -176,7 +176,7 @@ fn loadCrops(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
         const grow_max = try std.fmt.parseInt(i32, try row.cell(grow_max_i), 10);
         try rows.append(allocator, .{
             .crop_name_id = try strings.intern(try row.cell(crop_i)),
-            .growth_habit_id = try strings.intern(try row.cell(habit_i)),
+            .is_winter_annual = std.mem.eql(u8, try row.cell(habit_i), "Winter Annual"),
             .absolute_minimum_temperature = try std.fmt.parseInt(i32, try row.cell(abs_min_i), 10),
             .grow_day_minimum = grow_min,
             .grow_day_range = grow_max - grow_min,
@@ -187,7 +187,7 @@ fn loadCrops(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
 
 fn writeScores(allocator: std.mem.Allocator, io: std.Io, strings: array_store.StringInterner, rows: []Result, output_path: []const u8) !void {
     std.mem.sort(Result, rows, {}, sortRows);
-    var output = writer_mod.Writer.create(allocator, io, output_path);
+    var output = try writer_mod.Writer.create(allocator, io, output_path);
     defer output.close();
     try output.writeAll("crop_common_name\ttownship_id\tgrowing_season_suitability_score\n");
     for (rows) |row| try output.print("{s}\t{s}\t{d}\n", .{ strings.get(row.crop_name_id), strings.get(row.township_id), row.score });
@@ -211,4 +211,11 @@ fn sortRows(_: void, a: Result, b: Result) bool {
 fn sortNormals(_: void, a: DailyNormal, b: DailyNormal) bool {
     if (a.township_id == b.township_id) return a.julian_day < b.julian_day;
     return a.township_id < b.township_id;
+}
+
+test "example-derived growing season thresholds" {
+    // Onion in the published example requires 85-175 growing days.
+    try std.testing.expectEqual(@as(i32, 0), growingSeasonScore(84, 85, 90));
+    try std.testing.expectEqual(@as(i32, 1), growingSeasonScore(85, 85, 90));
+    try std.testing.expectEqual(@as(i32, 4), growingSeasonScore(119, 85, 90));
 }

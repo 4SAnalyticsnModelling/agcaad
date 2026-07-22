@@ -249,26 +249,27 @@ fn accumulateTextureSuitabilityScores(
     texture_score_keys: TextureScoreKeyColumns,
     result_scores: *std.AutoHashMap(u64, f32),
 ) !void {
+    var score_by_requirement_texture = std.AutoHashMap(u64, f32).init(result_scores.allocator);
+    defer score_by_requirement_texture.deinit();
+    try score_by_requirement_texture.ensureTotalCapacity(@intCast(texture_score_keys.texture_scores.len));
+    for (texture_score_keys.texture_scores, 0..) |score, key_index| {
+        try score_by_requirement_texture.put(
+            packed_key.pack(texture_score_keys.texture_requirement_ids[key_index], texture_score_keys.texture_code_ids[key_index]),
+            score,
+        );
+    }
+
     for (soil_textures.township_ids, 0..) |township_id, soil_row_index| {
         const texture_code_id = soil_textures.texture_code_ids[soil_row_index];
         const soil_series_multiplier = soil_textures.soil_series_multipliers[soil_row_index];
 
         for (crop_requirements.crop_name_ids, 0..) |crop_name_id, crop_row_index| {
             const crop_texture_requirement_id = crop_requirements.texture_requirement_ids[crop_row_index];
-
-            for (texture_score_keys.texture_scores, 0..) |texture_score, key_row_index| {
-                if (texture_score_keys.texture_requirement_ids[key_row_index] != crop_texture_requirement_id) continue;
-                if (texture_score_keys.texture_code_ids[key_row_index] != texture_code_id) continue;
-
-                const packed_result_key = packed_key.pack(crop_name_id, township_id);
-                const weighted_score = math.roundToOneDecimal(texture_score * soil_series_multiplier);
-                const entry = try result_scores.getOrPut(packed_result_key);
-                if (entry.found_existing) {
-                    entry.value_ptr.* += weighted_score;
-                } else {
-                    entry.value_ptr.* = weighted_score;
-                }
-            }
+            const texture_score = score_by_requirement_texture.get(packed_key.pack(crop_texture_requirement_id, texture_code_id)) orelse continue;
+            const packed_result_key = packed_key.pack(crop_name_id, township_id);
+            const weighted_score = math.roundToOneDecimal(texture_score * soil_series_multiplier);
+            const entry = try result_scores.getOrPut(packed_result_key);
+            if (entry.found_existing) entry.value_ptr.* += weighted_score else entry.value_ptr.* = weighted_score;
         }
     }
 }
@@ -295,7 +296,7 @@ fn writeTextureSuitabilityScores(
 
     std.mem.sort(TextureSuitabilityResult, output_rows.items, {}, sortTextureSuitabilityResult);
 
-    var output = tab_writer.Writer.create(allocator, io, texture_output_path);
+    var output = try tab_writer.Writer.create(allocator, io, texture_output_path);
     defer output.close();
     try output.writeAll("crop_common_name\ttownship_id\tsoil_texture_suitability_score\n");
 

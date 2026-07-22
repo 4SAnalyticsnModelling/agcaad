@@ -93,4 +93,8 @@ fn ensureOutputLayout(io: std.Io, output_root: []const u8) !void {
 
 test {
     _ = @import("io/delimited_reader.zig");
+    _ = @import("climate/growing_season.zig");
+    _ = @import("climate/temperature_suitability.zig");
+    _ = @import("soil/drainage.zig");
+    _ = @import("soil/ph.zig");
 }

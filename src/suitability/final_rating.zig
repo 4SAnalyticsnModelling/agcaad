@@ -1,5 +1,7 @@
 const std = @import("std");
+const array_store = @import("../core/array_store.zig");
 const math = @import("../core/math.zig");
+const packed_key = @import("../core/packed_key.zig");
 const writer_mod = @import("../io/tab_writer.zig");
 
 const ScoreMask = struct {
@@ -14,8 +16,8 @@ const ScoreMask = struct {
 };
 
 const SuitabilityScores = struct {
-    common_name: []const u8,
-    township_id: []const u8,
+    common_name_id: u32,
+    township_id: u32,
     winter_cold_tolerance_score: f32 = 0,
     precipitation_suitability_score: f32 = 0,
     growing_season_score: f32 = 0,
@@ -27,7 +29,8 @@ const SuitabilityScores = struct {
 };
 
 const OutputRow = struct {
-    key: []const u8,
+    common_name: []const u8,
+    township: []const u8,
     scores: SuitabilityScores,
     overall_score: f32,
     rating: []const u8,
@@ -45,39 +48,38 @@ pub const Field = enum {
 
 pub const Accumulator = struct {
     allocator: std.mem.Allocator,
-    scores: std.StringHashMap(SuitabilityScores),
+    strings: array_store.StringInterner,
+    scores: std.AutoHashMap(u64, SuitabilityScores),
 
     pub fn init(allocator: std.mem.Allocator) Accumulator {
-        return .{ .allocator = allocator, .scores = std.StringHashMap(SuitabilityScores).init(allocator) };
+        return .{
+            .allocator = allocator,
+            .strings = array_store.StringInterner.init(allocator),
+            .scores = std.AutoHashMap(u64, SuitabilityScores).init(allocator),
+        };
     }
 
     pub fn deinit(self: *Accumulator) void {
-        var it = self.scores.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.common_name);
-            self.allocator.free(entry.value_ptr.township_id);
-        }
         self.scores.deinit();
+        self.strings.deinit();
     }
 
     pub fn addScore(self: *Accumulator, crop_common_name: []const u8, township_id: []const u8, field: Field, value: f32) !void {
-        const key = try std.fmt.allocPrint(self.allocator, "{s}\t{s}", .{ crop_common_name, township_id });
-        const entry = try self.scores.getOrPut(key);
+        const common_name_id = try self.strings.intern(crop_common_name);
+        const township_name_id = try self.strings.intern(township_id);
+        const entry = try self.scores.getOrPut(packed_key.pack(common_name_id, township_name_id));
         if (!entry.found_existing) {
             entry.value_ptr.* = .{
-                .common_name = try self.allocator.dupe(u8, crop_common_name),
-                .township_id = try self.allocator.dupe(u8, township_id),
+                .common_name_id = common_name_id,
+                .township_id = township_name_id,
             };
-        } else {
-            self.allocator.free(key);
         }
         setScoreField(entry.value_ptr, field, value);
         entry.value_ptr.present_mask |= maskForField(field);
     }
 
     pub fn write(self: Accumulator, io: std.Io, output_path: []const u8) !void {
-        try writeFinalRatings(self.allocator, io, self.scores, output_path);
+        try writeFinalRatings(self.allocator, io, self.strings, self.scores, output_path);
     }
 };
 
@@ -105,7 +107,7 @@ fn setScoreField(scores: *SuitabilityScores, field: Field, value: f32) void {
     }
 }
 
-fn writeFinalRatings(allocator: std.mem.Allocator, io: std.Io, scores: std.StringHashMap(SuitabilityScores), output_path: []const u8) !void {
+fn writeFinalRatings(allocator: std.mem.Allocator, io: std.Io, strings: array_store.StringInterner, scores: std.AutoHashMap(u64, SuitabilityScores), output_path: []const u8) !void {
     var rows: std.ArrayList(OutputRow) = .empty;
     defer rows.deinit(allocator);
     var it = scores.iterator();
@@ -113,7 +115,8 @@ fn writeFinalRatings(allocator: std.mem.Allocator, io: std.Io, scores: std.Strin
         if (entry.value_ptr.present_mask != ScoreMask.complete) continue;
         const overall_score = calculateOverallScore(entry.value_ptr.*);
         try rows.append(allocator, .{
-            .key = entry.key_ptr.*,
+            .common_name = strings.get(entry.value_ptr.common_name_id),
+            .township = strings.get(entry.value_ptr.township_id),
             .scores = entry.value_ptr.*,
             .overall_score = overall_score,
             .rating = ratingForScore(overall_score),
@@ -121,13 +124,13 @@ fn writeFinalRatings(allocator: std.mem.Allocator, io: std.Io, scores: std.Strin
     }
     std.mem.sort(OutputRow, rows.items, {}, sortRows);
 
-    var output = writer_mod.Writer.create(allocator, io, output_path);
+    var output = try writer_mod.Writer.create(allocator, io, output_path);
     defer output.close();
     try output.writeAll("crop_common_name\ttownship_id\twinter_cold_tolerance_score\tprecipitation_suitability_score\tgrowing_season_suitability_score\tsoil_drainage_suitability_score\tsoil_ph_suitability_score\tsoil_texture_suitability_score\ttemperature_suitability_score\toverall_suitability_score\toverall_suitability_rating\tlimitation_notes\n");
     for (rows.items) |row| {
         try output.print("{s}\t{s}\t{d:.1}\t{d:.1}\t{d:.1}\t{d:.1}\t{d:.1}\t{d:.1}\t{d:.1}\t{d:.1}\t{s}\t", .{
-            row.scores.common_name,
-            row.scores.township_id,
+            row.common_name,
+            row.township,
             row.scores.winter_cold_tolerance_score,
             row.scores.precipitation_suitability_score,
             row.scores.growing_season_score,
@@ -183,5 +186,6 @@ fn writeLimitationNote(output: *writer_mod.Writer, has_note: *bool, factor_name:
 }
 
 fn sortRows(_: void, left: OutputRow, right: OutputRow) bool {
-    return std.mem.lessThan(u8, left.key, right.key);
+    const crop_order = std.mem.order(u8, left.common_name, right.common_name);
+    return if (crop_order == .eq) std.mem.lessThan(u8, left.township, right.township) else crop_order == .lt;
 }

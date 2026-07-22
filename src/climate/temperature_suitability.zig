@@ -10,7 +10,7 @@ const final_rating = @import("../suitability/final_rating.zig");
 
 const CropTemperature = struct {
     crop_name_id: u32,
-    growth_habit_id: u32,
+    is_winter_annual: bool,
     absolute_maximum_temperature: f32,
     absolute_minimum_temperature: f32,
     optimum_maximum_temperature: f32,
@@ -132,7 +132,7 @@ fn loadCropTemperatures(allocator: std.mem.Allocator, io: std.Io, strings: *arra
     while (reader.nextRow()) |row| {
         try crops.append(allocator, .{
             .crop_name_id = try strings.intern(try row.cell(crop_i)),
-            .growth_habit_id = try strings.intern(try row.cell(habit_i)),
+            .is_winter_annual = std.mem.eql(u8, try row.cell(habit_i), "Winter Annual"),
             .absolute_maximum_temperature = try std.fmt.parseFloat(f32, try row.cell(abs_max_i)),
             .absolute_minimum_temperature = try std.fmt.parseFloat(f32, try row.cell(abs_min_i)),
             .optimum_maximum_temperature = try std.fmt.parseFloat(f32, try row.cell(opt_max_i)),
@@ -171,7 +171,7 @@ fn loadCropDayMasks(
         const maximum_temperature = try std.fmt.parseFloat(f32, try reader.cell(line, max_i));
         const minimum_temperature = try std.fmt.parseFloat(f32, try reader.cell(line, min_i));
         for (crops, 0..) |crop, crop_index| {
-            if (std.mem.eql(u8, strings.get(crop.growth_habit_id), "Winter Annual") or
+            if (crop.is_winter_annual or
                 (maximum_temperature > crop.absolute_minimum_temperature and minimum_temperature > 0))
             {
                 started[crop_index] = true;
@@ -255,7 +255,7 @@ fn writeTemperatureScores(
         });
     }
     std.mem.sort(Result, rows.items, {}, sortRows);
-    var output = writer_mod.Writer.create(allocator, io, output_path);
+    var output = try writer_mod.Writer.create(allocator, io, output_path);
     defer output.close();
     try output.writeAll("crop_common_name\ttownship_id\ttemperature_suitability_score\n");
     for (rows.items) |row| {
@@ -280,4 +280,19 @@ fn unpackCropTownship(value: u64) struct { crop_name_id: u32, township_id: u32 }
 fn sortRows(_: void, a: Result, b: Result) bool {
     if (a.crop_name_id == b.crop_name_id) return a.township_id < b.township_id;
     return a.crop_name_id < b.crop_name_id;
+}
+
+test "example-derived onion hourly temperature scoring" {
+    const onion: CropTemperature = .{
+        .crop_name_id = 0,
+        .is_winter_annual = false,
+        .absolute_maximum_temperature = 29,
+        .absolute_minimum_temperature = 7,
+        .optimum_maximum_temperature = 24,
+        .optimum_minimum_temperature = 12,
+    };
+    try std.testing.expectEqual(@as(i32, 0), hourlyTemperatureScore(6.9, onion));
+    try std.testing.expectEqual(@as(i32, 3), hourlyTemperatureScore(10, onion));
+    try std.testing.expectEqual(@as(i32, 4), hourlyTemperatureScore(20, onion));
+    try std.testing.expectEqual(@as(i32, 0), hourlyTemperatureScore(30, onion));
 }

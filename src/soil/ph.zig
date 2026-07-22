@@ -182,7 +182,7 @@ fn writeResults(allocator: std.mem.Allocator, io: std.Io, strings: array_store.S
         try rows.append(allocator, .{ .crop_name_id = ids.first, .township_id = ids.second, .ph_score = math.roundToOneDecimal(entry.value_ptr.*) });
     }
     std.mem.sort(PhResult, rows.items, {}, sortRows);
-    var output = writer_mod.Writer.create(allocator, io, output_path);
+    var output = try writer_mod.Writer.create(allocator, io, output_path);
     defer output.close();
     try output.writeAll("crop_common_name\ttownship_id\tsoil_ph_suitability_score\n");
     for (rows.items) |row| try output.print("{s}\t{s}\t{d:.1}\n", .{ strings.get(row.crop_name_id), strings.get(row.township_id), row.ph_score });
@@ -191,4 +191,10 @@ fn writeResults(allocator: std.mem.Allocator, io: std.Io, strings: array_store.S
 
 fn sortRows(_: void, a: PhResult, b: PhResult) bool {
     return if (a.crop_name_id == b.crop_name_id) a.township_id < b.township_id else a.crop_name_id < b.crop_name_id;
+}
+
+test "example-derived yarrow soil pH scores" {
+    // Example requirement range is pH 6-8; the first soil components are 7.5 and 7.1.
+    try std.testing.expectEqual(@as(i32, 3), phSuitabilityScore(7.5, 6, 8));
+    try std.testing.expectEqual(@as(i32, 4), phSuitabilityScore(7.1, 6, 8));
 }
