@@ -8,14 +8,25 @@ pub const Reader = struct {
     read_buffer: []u8,
     header: []const u8,
     delimiter: u8,
+    path: []const u8,
+    row_number: usize = 1,
 
     pub fn open(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Reader {
-        const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+        const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| {
+            std.debug.print("Failed to open input file '{s}': {s}\n", .{ path, @errorName(err) });
+            return err;
+        };
         errdefer file.close(io);
         const read_buffer = try allocator.alloc(u8, 1024 * 1024);
         errdefer allocator.free(read_buffer);
         var file_reader = file.readerStreaming(io, read_buffer);
-        const raw_header = (try file_reader.interface.takeDelimiter('\n')) orelse return error.EmptyFile;
+        const raw_header = (file_reader.interface.takeDelimiter('\n') catch |err| {
+            std.debug.print("Failed to read header from '{s}': {s}\n", .{ path, @errorName(err) });
+            return err;
+        }) orelse {
+            std.debug.print("Input file is empty: '{s}'\n", .{path});
+            return error.EmptyFile;
+        };
         const header = try allocator.dupe(u8, trimLine(raw_header));
         errdefer allocator.free(header);
         return .{
@@ -26,6 +37,7 @@ pub const Reader = struct {
             .read_buffer = read_buffer,
             .header = header,
             .delimiter = if (std.mem.indexOfScalar(u8, header, '\t') != null) '\t' else ',',
+            .path = path,
         };
     }
 
@@ -36,7 +48,11 @@ pub const Reader = struct {
     }
 
     pub fn nextLine(self: *Reader) !?[]const u8 {
-        while (try self.file_reader.interface.takeDelimiter('\n')) |line| {
+        while (self.file_reader.interface.takeDelimiter('\n') catch |err| {
+            std.debug.print("Failed reading '{s}' near row {d}: {s}\n", .{ self.path, self.row_number + 1, @errorName(err) });
+            return err;
+        }) |line| {
+            self.row_number += 1;
             const trimmed_line = trimLine(line);
             if (trimmed_line.len == 0) continue;
             return trimmed_line;
@@ -50,6 +66,7 @@ pub const Reader = struct {
         while (cells.next()) |header_cell| : (column_index += 1) {
             if (std.mem.eql(u8, trimCell(header_cell), name)) return column_index;
         }
+        std.debug.print("Missing required column '{s}' in '{s}'\n", .{ name, self.path });
         return error.MissingColumn;
     }
 
@@ -59,7 +76,16 @@ pub const Reader = struct {
         while (cells.next()) |cell_text| : (column_index += 1) {
             if (column_index == target_column_index) return trimCell(cell_text);
         }
+        std.debug.print("Missing cell in '{s}' at row {d}, column index {d}\n", .{ self.path, self.row_number, target_column_index });
         return error.MissingCell;
+    }
+
+    pub fn intCell(self: Reader, comptime T: type, line: []const u8, target_column_index: usize, column_name: []const u8) !T {
+        return @import("parse.zig").integer(T, self.path, self.row_number, column_name, try self.cell(line, target_column_index));
+    }
+
+    pub fn floatCell(self: Reader, comptime T: type, line: []const u8, target_column_index: usize, column_name: []const u8) !T {
+        return @import("parse.zig").float(T, self.path, self.row_number, column_name, try self.cell(line, target_column_index));
     }
 };
 

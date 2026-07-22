@@ -74,7 +74,10 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
 }
 
 fn calculateScoresParallel(allocator: std.mem.Allocator, crops: []const CropPrecipitation, precip: []const TownshipPrecipitation) ![]Result {
-    const total_count = crops.len * precip.len;
+    const total_count = std.math.mul(usize, crops.len, precip.len) catch {
+        std.debug.print("Precipitation result count exceeds addressable memory: {d} crops by {d} townships\n", .{ crops.len, precip.len });
+        return error.InputTooLarge;
+    };
     const rows = try allocator.alloc(Result, total_count);
     errdefer allocator.free(rows);
     const workers = parallel.workerCount(total_count);
@@ -85,14 +88,20 @@ fn calculateScoresParallel(allocator: std.mem.Allocator, crops: []const CropPrec
     }
     const threads = try allocator.alloc(std.Thread, workers);
     defer allocator.free(threads);
+    var spawned: usize = 0;
     for (threads, 0..) |*thread, worker_index| {
-        thread.* = try std.Thread.spawn(.{}, calculateScoreChunk, .{
+        thread.* = std.Thread.spawn(.{}, calculateScoreChunk, .{
             crops,
             precip,
             rows,
             parallel.chunkStart(total_count, worker_index, workers),
             parallel.chunkEnd(total_count, worker_index, workers),
-        });
+        }) catch |err| {
+            for (threads[0..spawned]) |running_thread| running_thread.join();
+            std.debug.print("Failed to start precipitation worker {d} of {d}: {s}\n", .{ worker_index + 1, workers, @errorName(err) });
+            return err;
+        };
+        spawned += 1;
     }
     for (threads) |thread| thread.join();
     return rows;
@@ -126,7 +135,7 @@ fn loadPrecip(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.St
     while (r.nextRow()) |row| {
         try rows.append(allocator, .{
             .township_id = try strings.intern(try row.cell(township_i)),
-            .precipitation = try std.fmt.parseInt(i32, try row.cell(precip_i), 10),
+            .precipitation = try row.intCell(i32, precip_i, "annual_precipitation_mm"),
         });
     }
     return rows.toOwnedSlice(allocator);
@@ -141,10 +150,16 @@ fn loadCrops(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
     var rows: std.ArrayList(CropPrecipitation) = .empty;
     errdefer rows.deinit(allocator);
     while (r.nextRow()) |row| {
+        const minimum = try row.intCell(i32, min_i, "minimum_annual_precipitation_mm");
+        const maximum = try row.intCell(i32, max_i, "maximum_annual_precipitation_mm");
+        if (maximum < minimum) {
+            std.debug.print("Invalid precipitation range in '{s}' at row {d}: maximum {d} is less than minimum {d}\n", .{ row.path, row.row_number, maximum, minimum });
+            return error.InvalidRange;
+        }
         try rows.append(allocator, .{
             .crop_name_id = try strings.intern(try row.cell(crop_i)),
-            .minimum = try std.fmt.parseInt(i32, try row.cell(min_i), 10),
-            .maximum = try std.fmt.parseInt(i32, try row.cell(max_i), 10),
+            .minimum = minimum,
+            .maximum = maximum,
         });
     }
     return rows.toOwnedSlice(allocator);
@@ -167,6 +182,15 @@ fn precipitationSuitabilityScore(precipitation: i32, minimum: i32, maximum: i32)
     if (p >= min - range / 3.0 and p <= max + 480) return 2;
     if (p >= min - 2.0 * range / 3.0 and p <= max + 600) return 1;
     return 0;
+}
+
+test "example-derived wheatgrass precipitation thresholds" {
+    // Crested wheatgrass in the example has a 150-450 mm requirement.
+    try std.testing.expectEqual(@as(i32, 0), precipitationSuitabilityScore(-201, 150, 450));
+    try std.testing.expectEqual(@as(i32, 3), precipitationSuitabilityScore(150, 150, 450));
+    try std.testing.expectEqual(@as(i32, 4), precipitationSuitabilityScore(356, 150, 450));
+    try std.testing.expectEqual(@as(i32, 2), precipitationSuitabilityScore(826, 150, 450));
+    try std.testing.expectEqual(@as(i32, 0), precipitationSuitabilityScore(991, 150, 450));
 }
 
 fn sortRows(_: void, a: Result, b: Result) bool {

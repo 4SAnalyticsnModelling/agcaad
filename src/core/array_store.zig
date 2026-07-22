@@ -20,6 +20,10 @@ pub const StringInterner = struct {
 
     pub fn intern(self: *StringInterner, value: []const u8) !u32 {
         if (self.lookup.get(value)) |existing_id| return existing_id;
+        if (self.values.items.len > std.math.maxInt(u32)) {
+            std.debug.print("Too many unique strings to intern: maximum supported count is {d}\n", .{std.math.maxInt(u32) + 1});
+            return error.TooManyUniqueStrings;
+        }
         const owned_value = try self.allocator.dupe(u8, value);
         const new_id: u32 = @intCast(self.values.items.len);
         try self.values.append(self.allocator, owned_value);
@@ -32,6 +36,12 @@ pub const StringInterner = struct {
     }
 };
 
-pub fn appendRuntimeValue(comptime T: type, allocator: std.mem.Allocator, values: *std.ArrayList(T), value: T) !void {
-    try values.append(allocator, value);
+test "string interner deduplicates values and preserves identifiers" {
+    var strings = StringInterner.init(std.testing.allocator);
+    defer strings.deinit();
+    const first = try strings.intern("T001R01W4");
+    const second = try strings.intern("Onion");
+    try std.testing.expectEqual(first, try strings.intern("T001R01W4"));
+    try std.testing.expect(first != second);
+    try std.testing.expectEqualStrings("Onion", strings.get(second));
 }

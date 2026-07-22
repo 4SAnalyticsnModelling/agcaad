@@ -98,6 +98,10 @@ examples/
 
 Temperature-suitability growing days are calculated for all crops from the daily temperature normals; no precomputed crop-day files are required. Input folders should contain only the input `.txt` files. Nested input folders are not used.
 
+## Input Validation and Diagnostics
+
+AgCAAD validates required files and columns, numeric syntax, finite values, physical ranges, crop threshold ordering, score-key coverage, duplicate scores, and completeness across overlapping soil and climate data. Invalid input stops the run with the failing stage and, when applicable, the filename, row, column, and offending value. Crop/township pairs wholly outside either the soil or climate coverage are reported as a coverage notice and omitted; partially populated overlapping pairs are treated as errors.
+
 ## Output Columns
 
 The full run writes one tab-delimited file with these columns:

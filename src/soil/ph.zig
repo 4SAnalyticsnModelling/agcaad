@@ -129,8 +129,8 @@ fn loadSoils(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
     }
     while (r.nextRow()) |row| {
         try township_ids.append(allocator, try strings.intern(try row.cell(township_i)));
-        try multipliers.append(allocator, math.roundToTwoDecimals(try std.fmt.parseFloat(f32, try row.cell(multiplier_i))));
-        try ph_values.append(allocator, math.roundToTwoDecimals(try std.fmt.parseFloat(f32, try row.cell(ph_i))));
+        try multipliers.append(allocator, math.roundToTwoDecimals(try row.boundedFloatCell(f32, multiplier_i, "soil_component_area_fraction", 0, 1)));
+        try ph_values.append(allocator, math.roundToTwoDecimals(try row.boundedFloatCell(f32, ph_i, "soil_ph", 0, 14)));
     }
     return .{ .township_ids = try township_ids.toOwnedSlice(allocator), .multipliers = try multipliers.toOwnedSlice(allocator), .ph_values = try ph_values.toOwnedSlice(allocator) };
 }
@@ -151,8 +151,14 @@ fn loadCrops(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
     }
     while (r.nextRow()) |row| {
         try crop_name_ids.append(allocator, try strings.intern(try row.cell(crop_i)));
-        try ph_minimums.append(allocator, try std.fmt.parseFloat(f32, try row.cell(min_i)));
-        try ph_maximums.append(allocator, try std.fmt.parseFloat(f32, try row.cell(max_i)));
+        const minimum = try row.boundedFloatCell(f32, min_i, "minimum_soil_ph", 0, 14);
+        const maximum = try row.boundedFloatCell(f32, max_i, "maximum_soil_ph", 0, 14);
+        if (maximum < minimum) {
+            std.debug.print("Invalid soil pH range in '{s}' at row {d}: maximum {d} is less than minimum {d}\n", .{ row.path, row.row_number, maximum, minimum });
+            return error.InvalidRange;
+        }
+        try ph_minimums.append(allocator, minimum);
+        try ph_maximums.append(allocator, maximum);
     }
     return .{ .crop_name_ids = try crop_name_ids.toOwnedSlice(allocator), .ph_minimums = try ph_minimums.toOwnedSlice(allocator), .ph_maximums = try ph_maximums.toOwnedSlice(allocator) };
 }

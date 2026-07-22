@@ -79,7 +79,10 @@ fn calculateScoresParallel(
     crops: []const CropWinterTolerance,
     townships: []const TownshipWinterMinimum,
 ) ![]Result {
-    const total_count = crops.len * townships.len;
+    const total_count = std.math.mul(usize, crops.len, townships.len) catch {
+        std.debug.print("Winter-cold result count exceeds addressable memory: {d} crops by {d} townships\n", .{ crops.len, townships.len });
+        return error.InputTooLarge;
+    };
     const rows = try allocator.alloc(Result, total_count);
     errdefer allocator.free(rows);
     const workers = parallel.workerCount(total_count);
@@ -90,15 +93,21 @@ fn calculateScoresParallel(
     }
     const threads = try allocator.alloc(std.Thread, workers);
     defer allocator.free(threads);
+    var spawned: usize = 0;
     for (threads, 0..) |*thread, worker_index| {
-        thread.* = try std.Thread.spawn(.{}, calculateScoreChunk, .{
+        thread.* = std.Thread.spawn(.{}, calculateScoreChunk, .{
             strings,
             crops,
             townships,
             rows,
             parallel.chunkStart(total_count, worker_index, workers),
             parallel.chunkEnd(total_count, worker_index, workers),
-        });
+        }) catch |err| {
+            for (threads[0..spawned]) |running_thread| running_thread.join();
+            std.debug.print("Failed to start winter-cold worker {d} of {d}: {s}\n", .{ worker_index + 1, workers, @errorName(err) });
+            return err;
+        };
+        spawned += 1;
     }
     for (threads) |thread| thread.join();
     return rows;
@@ -132,7 +141,7 @@ fn loadTownships(allocator: std.mem.Allocator, io: std.Io, strings: *array_store
     errdefer rows.deinit(allocator);
     while (r.nextRow()) |row| try rows.append(allocator, .{
         .township_id = try strings.intern(try row.cell(township_i)),
-        .minimum_temperature_quantile_05 = try std.fmt.parseFloat(f32, try row.cell(min_i)),
+        .minimum_temperature_quantile_05 = try row.floatCell(f32, min_i, "minimum_temperature_quantile_05_celsius"),
     });
     return rows.toOwnedSlice(allocator);
 }
@@ -150,7 +159,7 @@ fn loadCrops(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
         try rows.append(allocator, .{
             .crop_name_id = try strings.intern(try row.cell(crop_i)),
             .growth_habit_id = try strings.intern(try row.cell(habit_i)),
-            .critical_minimum_winter_temperature = if (critical_text.len == 0) null else try std.fmt.parseFloat(f32, critical_text),
+            .critical_minimum_winter_temperature = if (critical_text.len == 0) null else try row.floatCell(f32, critical_i, "critical_minimum_winter_temperature_celsius"),
         });
     }
     return rows.toOwnedSlice(allocator);
@@ -168,6 +177,12 @@ fn winterColdToleranceScore(growth_habit: []const u8, critical_minimum: ?f32, to
     if (township_minimum > critical + 2) return 2;
     if (township_minimum > critical + 1) return 1;
     return 0;
+}
+
+test "example-derived winter cold scoring" {
+    try std.testing.expectEqual(@as(i32, 4), winterColdToleranceScore("Winter Annual", -46, -21.9));
+    try std.testing.expectEqual(@as(i32, 4), winterColdToleranceScore("Perennial", null, -21.9));
+    try std.testing.expectEqual(@as(i32, 0), winterColdToleranceScore("Perennial", -10, -21.9));
 }
 
 fn sortRows(_: void, a: Result, b: Result) bool {

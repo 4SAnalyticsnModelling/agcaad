@@ -6,9 +6,13 @@ pub const Writer = struct {
     file: std.Io.File,
     file_writer: std.Io.File.Writer,
     buffer: []u8,
+    path: []const u8,
 
     pub fn create(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Writer {
-        const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+        const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch |err| {
+            std.debug.print("Failed to create output file '{s}': {s}\n", .{ path, @errorName(err) });
+            return err;
+        };
         errdefer file.close(io);
         const buffer = try allocator.alloc(u8, 64 * 1024);
         errdefer allocator.free(buffer);
@@ -18,6 +22,7 @@ pub const Writer = struct {
             .file = file,
             .file_writer = file.writerStreaming(io, buffer),
             .buffer = buffer,
+            .path = path,
         };
     }
 
@@ -27,14 +32,23 @@ pub const Writer = struct {
     }
 
     pub fn flush(self: *Writer) !void {
-        try self.file_writer.interface.flush();
+        self.file_writer.interface.flush() catch |err| {
+            std.debug.print("Failed to flush output file '{s}': {s}\n", .{ self.path, @errorName(err) });
+            return err;
+        };
     }
 
     pub fn print(self: *Writer, comptime format: []const u8, args: anytype) !void {
-        try self.file_writer.interface.print(format, args);
+        self.file_writer.interface.print(format, args) catch |err| {
+            std.debug.print("Failed writing output file '{s}': {s}\n", .{ self.path, @errorName(err) });
+            return err;
+        };
     }
 
     pub fn writeAll(self: *Writer, bytes: []const u8) !void {
-        try self.file_writer.interface.writeAll(bytes);
+        self.file_writer.interface.writeAll(bytes) catch |err| {
+            std.debug.print("Failed writing output file '{s}': {s}\n", .{ self.path, @errorName(err) });
+            return err;
+        };
     }
 };

@@ -2,6 +2,7 @@ const std = @import("std");
 const array_store = @import("../core/array_store.zig");
 const parallel = @import("../core/parallel.zig");
 const reader_mod = @import("../io/delimited_reader.zig");
+const stream_reader_mod = @import("../io/streaming_line_reader.zig");
 const writer_mod = @import("../io/tab_writer.zig");
 const paths_mod = @import("../paths.zig");
 const final_rating = @import("../suitability/final_rating.zig");
@@ -72,7 +73,10 @@ fn calculateScoresParallel(
 ) ![]Result {
     const township_ranges = try buildTownshipRanges(allocator, normals);
     defer allocator.free(township_ranges);
-    const total_jobs = crops.len * township_ranges.len;
+    const total_jobs = std.math.mul(usize, crops.len, township_ranges.len) catch {
+        std.debug.print("Growing-season result count exceeds addressable memory: {d} crops by {d} townships\n", .{ crops.len, township_ranges.len });
+        return error.InputTooLarge;
+    };
     const rows = try allocator.alloc(Result, total_jobs);
     errdefer allocator.free(rows);
     const workers = parallel.workerCount(total_jobs);
@@ -84,15 +88,21 @@ fn calculateScoresParallel(
 
     const threads = try allocator.alloc(std.Thread, workers);
     defer allocator.free(threads);
+    var spawned: usize = 0;
     for (threads, 0..) |*thread, worker_index| {
-        thread.* = try std.Thread.spawn(.{}, calculateScoreChunk, .{
+        thread.* = std.Thread.spawn(.{}, calculateScoreChunk, .{
             normals,
             township_ranges,
             crops,
             rows,
             parallel.chunkStart(total_jobs, worker_index, workers),
             parallel.chunkEnd(total_jobs, worker_index, workers),
-        });
+        }) catch |err| {
+            for (threads[0..spawned]) |running_thread| running_thread.join();
+            std.debug.print("Failed to start growing-season worker {d} of {d}: {s}\n", .{ worker_index + 1, workers, @errorName(err) });
+            return err;
+        };
+        spawned += 1;
     }
     for (threads) |thread| thread.join();
     return rows;
@@ -143,21 +153,26 @@ fn buildTownshipRanges(allocator: std.mem.Allocator, normals: []const DailyNorma
 }
 
 fn loadNormals(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.StringInterner, path: []const u8) ![]DailyNormal {
-    var r = try reader_mod.Reader.open(allocator, io, path);
+    var r = try stream_reader_mod.Reader.open(allocator, io, path);
     defer r.close();
-    const township_i = try r.header.columnIndex("township_id");
-    const jd_i = try r.header.columnIndex("julian_day");
-    const max_i = try r.header.columnIndex("maximum_temperature_quantile_75_celsius");
-    const min_i = try r.header.columnIndex("minimum_temperature_quantile_25_celsius");
+    const township_i = try r.columnIndex("township_id");
+    const jd_i = try r.columnIndex("julian_day");
+    const max_i = try r.columnIndex("maximum_temperature_quantile_75_celsius");
+    const min_i = try r.columnIndex("minimum_temperature_quantile_25_celsius");
     var rows: std.ArrayList(DailyNormal) = .empty;
     errdefer rows.deinit(allocator);
-    while (r.nextRow()) |row| try rows.append(allocator, .{
-        .township_id = try strings.intern(try row.cell(township_i)),
-        .julian_day = try std.fmt.parseInt(i32, try row.cell(jd_i), 10),
-        .max_temperature_quantile_75 = try std.fmt.parseFloat(f32, try row.cell(max_i)),
-        .min_temperature_quantile_25 = try std.fmt.parseFloat(f32, try row.cell(min_i)),
-    });
-    std.mem.sort(DailyNormal, rows.items, {}, sortNormals);
+    var already_sorted = true;
+    while (try r.nextLine()) |line| {
+        const normal: DailyNormal = .{
+            .township_id = try strings.intern(try r.cell(line, township_i)),
+            .julian_day = try r.intCell(i32, line, jd_i, "julian_day"),
+            .max_temperature_quantile_75 = try r.floatCell(f32, line, max_i, "maximum_temperature_quantile_75_celsius"),
+            .min_temperature_quantile_25 = try r.floatCell(f32, line, min_i, "minimum_temperature_quantile_25_celsius"),
+        };
+        if (rows.items.len != 0 and sortNormals({}, normal, rows.items[rows.items.len - 1])) already_sorted = false;
+        try rows.append(allocator, normal);
+    }
+    if (!already_sorted) std.mem.sort(DailyNormal, rows.items, {}, sortNormals);
     return rows.toOwnedSlice(allocator);
 }
 
@@ -172,12 +187,16 @@ fn loadCrops(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
     var rows: std.ArrayList(Crop) = .empty;
     errdefer rows.deinit(allocator);
     while (r.nextRow()) |row| {
-        const grow_min = try std.fmt.parseInt(i32, try row.cell(grow_min_i), 10);
-        const grow_max = try std.fmt.parseInt(i32, try row.cell(grow_max_i), 10);
+        const grow_min = try row.intCell(i32, grow_min_i, "minimum_growing_days");
+        const grow_max = try row.intCell(i32, grow_max_i, "maximum_growing_days");
+        if (grow_max < grow_min) {
+            std.debug.print("Invalid growing-day range in '{s}' at row {d}: maximum {d} is less than minimum {d}\n", .{ row.path, row.row_number, grow_max, grow_min });
+            return error.InvalidRange;
+        }
         try rows.append(allocator, .{
             .crop_name_id = try strings.intern(try row.cell(crop_i)),
             .is_winter_annual = std.mem.eql(u8, try row.cell(habit_i), "Winter Annual"),
-            .absolute_minimum_temperature = try std.fmt.parseInt(i32, try row.cell(abs_min_i), 10),
+            .absolute_minimum_temperature = try row.intCell(i32, abs_min_i, "absolute_minimum_temperature_celsius"),
             .grow_day_minimum = grow_min,
             .grow_day_range = grow_max - grow_min,
         });

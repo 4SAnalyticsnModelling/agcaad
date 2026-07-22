@@ -68,7 +68,7 @@ pub fn runWithPaths(allocator: std.mem.Allocator, io: std.Io, soil_path: []const
     defer keys.deinit(allocator);
     var totals = std.AutoHashMap(u64, f32).init(allocator);
     defer totals.deinit();
-    try accumulateScores(allocator, soils, crops, keys, &totals);
+    try accumulateScores(allocator, strings, soils, crops, keys, &totals);
     try writeResults(allocator, io, strings, totals, output_path);
 }
 
@@ -98,7 +98,7 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
 
     var totals = std.AutoHashMap(u64, f32).init(allocator);
     defer totals.deinit();
-    try accumulateScores(allocator, soils, crops, keys, &totals);
+    try accumulateScores(allocator, strings, soils, crops, keys, &totals);
 
     var it = totals.iterator();
     while (it.next()) |entry| {
@@ -107,18 +107,26 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     }
 }
 
-fn accumulateScores(allocator: std.mem.Allocator, soils: SoilDrainageColumns, crops: CropDrainageColumns, keys: DrainageKeyColumns, totals: *std.AutoHashMap(u64, f32)) !void {
+fn accumulateScores(allocator: std.mem.Allocator, strings: array_store.StringInterner, soils: SoilDrainageColumns, crops: CropDrainageColumns, keys: DrainageKeyColumns, totals: *std.AutoHashMap(u64, f32)) !void {
     var score_by_requirement_drainage = std.AutoHashMap(u64, f32).init(allocator);
     defer score_by_requirement_drainage.deinit();
     try score_by_requirement_drainage.ensureTotalCapacity(@intCast(keys.scores.len));
     for (keys.scores, 0..) |score, key_index| {
-        try score_by_requirement_drainage.put(packed_key.pack(keys.drainage_requirement_ids[key_index], keys.drainage_code_ids[key_index]), score);
+        const entry = try score_by_requirement_drainage.getOrPut(packed_key.pack(keys.drainage_requirement_ids[key_index], keys.drainage_code_ids[key_index]));
+        if (entry.found_existing) {
+            std.debug.print("Duplicate drainage score mapping for requirement '{s}' and drainage code '{s}'\n", .{ strings.get(keys.drainage_requirement_ids[key_index]), strings.get(keys.drainage_code_ids[key_index]) });
+            return error.DuplicateSuitabilityMapping;
+        }
+        entry.value_ptr.* = score;
     }
     for (soils.township_ids, 0..) |township_id, soil_index| {
         const drainage_code_id = soils.drainage_code_ids[soil_index];
         for (crops.crop_name_ids, 0..) |crop_name_id, crop_index| {
             const requirement_id = crops.drainage_requirement_ids[crop_index];
-            const score = score_by_requirement_drainage.get(packed_key.pack(requirement_id, drainage_code_id)) orelse continue;
+            const score = score_by_requirement_drainage.get(packed_key.pack(requirement_id, drainage_code_id)) orelse {
+                std.debug.print("Missing drainage score mapping for crop '{s}', requirement '{s}', drainage code '{s}'\n", .{ strings.get(crop_name_id), strings.get(requirement_id), strings.get(drainage_code_id) });
+                return error.MissingSuitabilityMapping;
+            };
             const weighted_score = math.roundToOneDecimal(score * soils.multipliers[soil_index]);
             const entry = try totals.getOrPut(packed_key.pack(crop_name_id, township_id));
             if (entry.found_existing) entry.value_ptr.* += weighted_score else entry.value_ptr.* = weighted_score;
@@ -143,7 +151,7 @@ fn loadSoils(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Str
     while (r.nextRow()) |row| {
         try township_ids.append(allocator, try strings.intern(try row.cell(township_i)));
         try drainage_code_ids.append(allocator, try strings.intern(try row.cell(drainage_i)));
-        try multipliers.append(allocator, math.roundToTwoDecimals(try std.fmt.parseFloat(f32, try row.cell(multiplier_i))));
+        try multipliers.append(allocator, math.roundToTwoDecimals(try row.boundedFloatCell(f32, multiplier_i, "soil_component_area_fraction", 0, 1)));
     }
     return .{ .township_ids = try township_ids.toOwnedSlice(allocator), .drainage_code_ids = try drainage_code_ids.toOwnedSlice(allocator), .multipliers = try multipliers.toOwnedSlice(allocator) };
 }
@@ -187,7 +195,7 @@ fn loadKeys(allocator: std.mem.Allocator, io: std.Io, strings: *array_store.Stri
     while (r.nextRow()) |row| {
         try drainage_requirement_ids.append(allocator, try strings.intern(try row.cell(req_i)));
         try drainage_code_ids.append(allocator, try strings.intern(try row.cell(drainage_i)));
-        try scores.append(allocator, try std.fmt.parseFloat(f32, try row.cell(score_i)));
+        try scores.append(allocator, try row.boundedFloatCell(f32, score_i, "soil_drainage_suitability_score", 0, 4));
     }
     return .{ .drainage_requirement_ids = try drainage_requirement_ids.toOwnedSlice(allocator), .drainage_code_ids = try drainage_code_ids.toOwnedSlice(allocator), .scores = try scores.toOwnedSlice(allocator) };
 }
@@ -215,14 +223,19 @@ fn sortRows(_: void, a: DrainageResult, b: DrainageResult) bool {
 test "indexed drainage lookup preserves example-derived weighted score" {
     const allocator = std.testing.allocator;
     const soils: SoilDrainageColumns = .{
-        .township_ids = @constCast(&[_]u32{ 1, 1 }),
-        .drainage_code_ids = @constCast(&[_]u32{ 2, 2 }),
+        .township_ids = @constCast(&[_]u32{ 0, 0 }),
+        .drainage_code_ids = @constCast(&[_]u32{ 1, 1 }),
         .multipliers = @constCast(&[_]f32{ 0.41, 0.08 }),
     };
-    const crops: CropDrainageColumns = .{ .crop_name_ids = @constCast(&[_]u32{3}), .drainage_requirement_ids = @constCast(&[_]u32{2}) };
-    const keys: DrainageKeyColumns = .{ .drainage_requirement_ids = @constCast(&[_]u32{2}), .drainage_code_ids = @constCast(&[_]u32{2}), .scores = @constCast(&[_]f32{4}) };
+    const crops: CropDrainageColumns = .{ .crop_name_ids = @constCast(&[_]u32{2}), .drainage_requirement_ids = @constCast(&[_]u32{1}) };
+    const keys: DrainageKeyColumns = .{ .drainage_requirement_ids = @constCast(&[_]u32{1}), .drainage_code_ids = @constCast(&[_]u32{1}), .scores = @constCast(&[_]f32{4}) };
     var totals = std.AutoHashMap(u64, f32).init(allocator);
     defer totals.deinit();
-    try accumulateScores(allocator, soils, crops, keys, &totals);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.9), totals.get(packed_key.pack(3, 1)).?, 0.001);
+    var strings = array_store.StringInterner.init(allocator);
+    defer strings.deinit();
+    _ = try strings.intern("township");
+    _ = try strings.intern("W");
+    _ = try strings.intern("crop");
+    try accumulateScores(allocator, strings, soils, crops, keys, &totals);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.9), totals.get(packed_key.pack(2, 0)).?, 0.001);
 }

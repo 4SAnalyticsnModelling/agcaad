@@ -91,6 +91,7 @@ pub fn runWithPaths(
     defer result_scores.deinit();
 
     try accumulateTextureSuitabilityScores(
+        string_ids,
         soil_textures,
         crop_requirements,
         texture_score_keys,
@@ -127,7 +128,7 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
 
     var result_scores = std.AutoHashMap(u64, f32).init(allocator);
     defer result_scores.deinit();
-    try accumulateTextureSuitabilityScores(soil_textures, crop_requirements, texture_score_keys, &result_scores);
+    try accumulateTextureSuitabilityScores(string_ids, soil_textures, crop_requirements, texture_score_keys, &result_scores);
 
     var it = result_scores.iterator();
     while (it.next()) |entry| {
@@ -166,7 +167,7 @@ fn loadSoilTextureColumns(
     while (reader.nextRow()) |row| {
         try township_ids.append(allocator, try string_ids.intern(try row.cell(township_column_index)));
         try texture_code_ids.append(allocator, try string_ids.intern(try row.cell(texture_code_column_index)));
-        try soil_series_multipliers.append(allocator, math.roundToTwoDecimals(try std.fmt.parseFloat(f32, try row.cell(multiplier_column_index))));
+        try soil_series_multipliers.append(allocator, math.roundToTwoDecimals(try row.boundedFloatCell(f32, multiplier_column_index, "soil_component_area_fraction", 0, 1)));
     }
 
     return .{
@@ -233,7 +234,7 @@ fn loadTextureScoreKeyColumns(
     while (reader.nextRow()) |row| {
         try texture_requirement_ids.append(allocator, try string_ids.intern(try row.cell(texture_requirement_column_index)));
         try texture_code_ids.append(allocator, try string_ids.intern(try row.cell(texture_code_column_index)));
-        try texture_scores.append(allocator, try std.fmt.parseFloat(f32, try row.cell(texture_score_column_index)));
+        try texture_scores.append(allocator, try row.boundedFloatCell(f32, texture_score_column_index, "soil_texture_suitability_score", 0, 4));
     }
 
     return .{
@@ -244,6 +245,7 @@ fn loadTextureScoreKeyColumns(
 }
 
 fn accumulateTextureSuitabilityScores(
+    string_ids: array_store.StringInterner,
     soil_textures: SoilTextureColumns,
     crop_requirements: CropTextureRequirementColumns,
     texture_score_keys: TextureScoreKeyColumns,
@@ -253,10 +255,12 @@ fn accumulateTextureSuitabilityScores(
     defer score_by_requirement_texture.deinit();
     try score_by_requirement_texture.ensureTotalCapacity(@intCast(texture_score_keys.texture_scores.len));
     for (texture_score_keys.texture_scores, 0..) |score, key_index| {
-        try score_by_requirement_texture.put(
-            packed_key.pack(texture_score_keys.texture_requirement_ids[key_index], texture_score_keys.texture_code_ids[key_index]),
-            score,
-        );
+        const entry = try score_by_requirement_texture.getOrPut(packed_key.pack(texture_score_keys.texture_requirement_ids[key_index], texture_score_keys.texture_code_ids[key_index]));
+        if (entry.found_existing) {
+            std.debug.print("Duplicate texture score mapping for requirement '{s}' and texture code '{s}'\n", .{ string_ids.get(texture_score_keys.texture_requirement_ids[key_index]), string_ids.get(texture_score_keys.texture_code_ids[key_index]) });
+            return error.DuplicateSuitabilityMapping;
+        }
+        entry.value_ptr.* = score;
     }
 
     for (soil_textures.township_ids, 0..) |township_id, soil_row_index| {
@@ -265,7 +269,10 @@ fn accumulateTextureSuitabilityScores(
 
         for (crop_requirements.crop_name_ids, 0..) |crop_name_id, crop_row_index| {
             const crop_texture_requirement_id = crop_requirements.texture_requirement_ids[crop_row_index];
-            const texture_score = score_by_requirement_texture.get(packed_key.pack(crop_texture_requirement_id, texture_code_id)) orelse continue;
+            const texture_score = score_by_requirement_texture.get(packed_key.pack(crop_texture_requirement_id, texture_code_id)) orelse {
+                std.debug.print("Missing texture score mapping for crop '{s}', requirement '{s}', texture code '{s}'\n", .{ string_ids.get(crop_name_id), string_ids.get(crop_texture_requirement_id), string_ids.get(texture_code_id) });
+                return error.MissingSuitabilityMapping;
+            };
             const packed_result_key = packed_key.pack(crop_name_id, township_id);
             const weighted_score = math.roundToOneDecimal(texture_score * soil_series_multiplier);
             const entry = try result_scores.getOrPut(packed_result_key);

@@ -17,12 +17,26 @@ pub const Paths = struct {
 };
 
 pub fn existingInputPath(allocator: std.mem.Allocator, io: std.Io, preferred_txt_path: []const u8) ![]const u8 {
-    std.Io.Dir.cwd().access(io, preferred_txt_path, .{}) catch {
-        if (!std.mem.endsWith(u8, preferred_txt_path, ".txt")) return allocator.dupe(u8, preferred_txt_path);
-        const fallback_csv_path = try allocator.alloc(u8, preferred_txt_path.len);
-        @memcpy(fallback_csv_path[0 .. preferred_txt_path.len - 3], preferred_txt_path[0 .. preferred_txt_path.len - 3]);
-        @memcpy(fallback_csv_path[preferred_txt_path.len - 3 ..], "csv");
-        return fallback_csv_path;
+    var txt_exists = true;
+    std.Io.Dir.cwd().access(io, preferred_txt_path, .{}) catch |txt_err| switch (txt_err) {
+        error.FileNotFound => txt_exists = false,
+        else => {
+            std.debug.print("Cannot access required input file '{s}': {s}\n", .{ preferred_txt_path, @errorName(txt_err) });
+            return txt_err;
+        },
     };
-    return allocator.dupe(u8, preferred_txt_path);
+    if (txt_exists) return allocator.dupe(u8, preferred_txt_path);
+    if (!std.mem.endsWith(u8, preferred_txt_path, ".txt")) {
+        std.debug.print("Required input file not found: '{s}'\n", .{preferred_txt_path});
+        return error.FileNotFound;
+    }
+    const fallback_csv_path = try allocator.alloc(u8, preferred_txt_path.len);
+    errdefer allocator.free(fallback_csv_path);
+    @memcpy(fallback_csv_path[0 .. preferred_txt_path.len - 3], preferred_txt_path[0 .. preferred_txt_path.len - 3]);
+    @memcpy(fallback_csv_path[preferred_txt_path.len - 3 ..], "csv");
+    std.Io.Dir.cwd().access(io, fallback_csv_path, .{}) catch |csv_err| {
+        std.debug.print("Required input file not found as either '{s}' or '{s}': {s}\n", .{ preferred_txt_path, fallback_csv_path, @errorName(csv_err) });
+        return csv_err;
+    };
+    return fallback_csv_path;
 }

@@ -24,6 +24,41 @@ const ScoreAccumulator = struct {
 
 const Result = struct { crop_name_id: u32, township_id: u32, temperature_score: f32 };
 
+const CropDayMasks = struct {
+    allocator: std.mem.Allocator,
+    word_count: usize,
+    words: std.ArrayList(u64) = .empty,
+    offset_by_township_day: std.AutoHashMap(u64, usize),
+
+    fn init(allocator: std.mem.Allocator, crop_count: usize) !CropDayMasks {
+        const padded_count = std.math.add(usize, crop_count, 63) catch return error.InputTooLarge;
+        return .{
+            .allocator = allocator,
+            .word_count = padded_count / 64,
+            .offset_by_township_day = std.AutoHashMap(u64, usize).init(allocator),
+        };
+    }
+
+    fn deinit(self: *CropDayMasks) void {
+        self.words.deinit(self.allocator);
+        self.offset_by_township_day.deinit();
+    }
+
+    fn getOrCreate(self: *CropDayMasks, key: u64) ![]u64 {
+        const entry = try self.offset_by_township_day.getOrPut(key);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = self.words.items.len;
+            try self.words.appendNTimes(self.allocator, 0, self.word_count);
+        }
+        return self.words.items[entry.value_ptr.*..][0..self.word_count];
+    }
+
+    fn get(self: CropDayMasks, key: u64) ?[]const u64 {
+        const offset = self.offset_by_township_day.get(key) orelse return null;
+        return self.words.items[offset..][0..self.word_count];
+    }
+};
+
 pub fn run(allocator: std.mem.Allocator, io: std.Io, input_root_path: []const u8, output_root_path: []const u8) !void {
     const input_paths = paths_mod.Paths.init(input_root_path);
     const output_paths = paths_mod.Paths.init(output_root_path);
@@ -58,12 +93,8 @@ pub fn runWithPaths(
     defer strings.deinit();
     const crops = try loadCropTemperatures(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
-    var crop_mask_by_township_day = std.AutoHashMap(u64, []u64).init(allocator);
-    defer {
-        var masks = crop_mask_by_township_day.valueIterator();
-        while (masks.next()) |mask| allocator.free(mask.*);
-        crop_mask_by_township_day.deinit();
-    }
+    var crop_mask_by_township_day = try CropDayMasks.init(allocator, crops.len);
+    defer crop_mask_by_township_day.deinit();
     try loadCropDayMasks(allocator, io, &strings, crops, &crop_mask_by_township_day, daily_path);
 
     var score_by_crop_township = std.AutoHashMap(u64, ScoreAccumulator).init(allocator);
@@ -92,12 +123,8 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     defer strings.deinit();
     const crops = try loadCropTemperatures(allocator, io, &strings, crop_path);
     defer allocator.free(crops);
-    var crop_mask_by_township_day = std.AutoHashMap(u64, []u64).init(allocator);
-    defer {
-        var masks = crop_mask_by_township_day.valueIterator();
-        while (masks.next()) |mask| allocator.free(mask.*);
-        crop_mask_by_township_day.deinit();
-    }
+    var crop_mask_by_township_day = try CropDayMasks.init(allocator, crops.len);
+    defer crop_mask_by_township_day.deinit();
     try loadCropDayMasks(allocator, io, &strings, crops, &crop_mask_by_township_day, daily_path);
 
     var score_by_crop_township = std.AutoHashMap(u64, ScoreAccumulator).init(allocator);
@@ -130,13 +157,21 @@ fn loadCropTemperatures(allocator: std.mem.Allocator, io: std.Io, strings: *arra
     var crops: std.ArrayList(CropTemperature) = .empty;
     errdefer crops.deinit(allocator);
     while (reader.nextRow()) |row| {
+        const absolute_maximum = try row.floatCell(f32, abs_max_i, "absolute_maximum_temperature_celsius");
+        const absolute_minimum = try row.floatCell(f32, abs_min_i, "absolute_minimum_temperature_celsius");
+        const optimum_maximum = try row.floatCell(f32, opt_max_i, "optimum_maximum_temperature_celsius");
+        const optimum_minimum = try row.floatCell(f32, opt_min_i, "optimum_minimum_temperature_celsius");
+        if (!(absolute_minimum <= optimum_minimum and optimum_minimum <= optimum_maximum and optimum_maximum <= absolute_maximum)) {
+            std.debug.print("Invalid temperature thresholds in '{s}' at row {d}: expected absolute_minimum <= optimum_minimum <= optimum_maximum <= absolute_maximum\n", .{ row.path, row.row_number });
+            return error.InvalidTemperatureRange;
+        }
         try crops.append(allocator, .{
             .crop_name_id = try strings.intern(try row.cell(crop_i)),
             .is_winter_annual = std.mem.eql(u8, try row.cell(habit_i), "Winter Annual"),
-            .absolute_maximum_temperature = try std.fmt.parseFloat(f32, try row.cell(abs_max_i)),
-            .absolute_minimum_temperature = try std.fmt.parseFloat(f32, try row.cell(abs_min_i)),
-            .optimum_maximum_temperature = try std.fmt.parseFloat(f32, try row.cell(opt_max_i)),
-            .optimum_minimum_temperature = try std.fmt.parseFloat(f32, try row.cell(opt_min_i)),
+            .absolute_maximum_temperature = absolute_maximum,
+            .absolute_minimum_temperature = absolute_minimum,
+            .optimum_maximum_temperature = optimum_maximum,
+            .optimum_minimum_temperature = optimum_minimum,
         });
     }
     return crops.toOwnedSlice(allocator);
@@ -147,7 +182,7 @@ fn loadCropDayMasks(
     io: std.Io,
     strings: *array_store.StringInterner,
     crops: []const CropTemperature,
-    crop_mask_by_township_day: *std.AutoHashMap(u64, []u64),
+    crop_mask_by_township_day: *CropDayMasks,
     path: []const u8,
 ) !void {
     var reader = try stream_reader_mod.Reader.open(allocator, io, path);
@@ -167,9 +202,9 @@ fn loadCropDayMasks(
             @memset(started, false);
             previous_township_id = township_id;
         }
-        const julian_day = try std.fmt.parseInt(u32, try reader.cell(line, jd_i), 10);
-        const maximum_temperature = try std.fmt.parseFloat(f32, try reader.cell(line, max_i));
-        const minimum_temperature = try std.fmt.parseFloat(f32, try reader.cell(line, min_i));
+        const julian_day = try reader.intCell(u32, line, jd_i, "julian_day");
+        const maximum_temperature = try reader.floatCell(f32, line, max_i, "maximum_temperature_quantile_75_celsius");
+        const minimum_temperature = try reader.floatCell(f32, line, min_i, "minimum_temperature_quantile_25_celsius");
         for (crops, 0..) |crop, crop_index| {
             if (crop.is_winter_annual or
                 (maximum_temperature > crop.absolute_minimum_temperature and minimum_temperature > 0))
@@ -178,12 +213,8 @@ fn loadCropDayMasks(
             }
             if (!started[crop_index] or minimum_temperature <= 0) continue;
 
-            const entry = try crop_mask_by_township_day.getOrPut(packTownshipDay(township_id, julian_day));
-            if (!entry.found_existing) {
-                entry.value_ptr.* = try allocator.alloc(u64, (crops.len + 63) / 64);
-                @memset(entry.value_ptr.*, 0);
-            }
-            entry.value_ptr.*[crop_index / 64] |= @as(u64, 1) << @intCast(crop_index % 64);
+            const mask = try crop_mask_by_township_day.getOrCreate(packTownshipDay(township_id, julian_day));
+            mask[crop_index / 64] |= @as(u64, 1) << @intCast(crop_index % 64);
         }
     }
 }
@@ -193,7 +224,7 @@ fn streamHourlyScores(
     io: std.Io,
     strings: *array_store.StringInterner,
     crops: []const CropTemperature,
-    crop_mask_by_township_day: std.AutoHashMap(u64, []u64),
+    crop_mask_by_township_day: CropDayMasks,
     score_by_crop_township: *std.AutoHashMap(u64, ScoreAccumulator),
     hourly_path: []const u8,
 ) !void {
@@ -205,9 +236,9 @@ fn streamHourlyScores(
 
     while (try reader.nextLine()) |line| {
         const township_id = try strings.intern(try reader.cell(line, township_i));
-        const julian_day = try std.fmt.parseInt(u32, try reader.cell(line, jd_i), 10);
+        const julian_day = try reader.intCell(u32, line, jd_i, "julian_day");
         const crop_mask = crop_mask_by_township_day.get(packTownshipDay(township_id, julian_day)) orelse continue;
-        const hourly_temperature = try std.fmt.parseFloat(f32, try reader.cell(line, temp_i));
+        const hourly_temperature = try reader.floatCell(f32, line, temp_i, "hourly_temperature_celsius");
 
         for (crop_mask, 0..) |mask_word, word_index| {
             var remaining_mask = mask_word;

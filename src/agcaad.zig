@@ -59,28 +59,36 @@ pub fn main(process_init: std.process.Init) !void {
     const output_root = options.output_root orelse return usageError(error.MissingRequiredArgument);
     parallel.setThreadCount(options.thread_count);
 
-    try ensureOutputLayout(process_init.io, output_root);
+    ensureOutputLayout(process_init.io, output_root) catch |err| {
+        std.debug.print("Failed to create or access output directory '{s}': {s}\n", .{ output_root, @errorName(err) });
+        return err;
+    };
 
     var final_scores = final_rating.Accumulator.init(allocator);
     defer final_scores.deinit();
 
-    try texture.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
-    try ph.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
-    try drainage.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
-    try precip_suitability.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
-    try winter_cold.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
-    try growing_season.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
-    try temperature_suitability.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores);
+    texture.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores) catch |err| return stageError("soil texture", err);
+    ph.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores) catch |err| return stageError("soil pH", err);
+    drainage.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores) catch |err| return stageError("soil drainage", err);
+    precip_suitability.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores) catch |err| return stageError("precipitation suitability", err);
+    winter_cold.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores) catch |err| return stageError("winter cold tolerance", err);
+    growing_season.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores) catch |err| return stageError("growing season suitability", err);
+    temperature_suitability.addToFinalAccumulator(allocator, process_init.io, input_root, &final_scores) catch |err| return stageError("temperature suitability", err);
 
     const output_paths = @import("paths.zig").Paths.init(output_root);
     const final_output_path = try output_paths.join(allocator, &.{"crop_suitability_rankings_and_overall_ratings.txt"});
     defer allocator.free(final_output_path);
-    try final_scores.write(process_init.io, final_output_path);
+    final_scores.write(process_init.io, final_output_path) catch |err| return stageError("final rating output", err);
     std.debug.print("AgCAAD run completed.\n", .{});
 }
 
 fn usageError(err: anyerror) anyerror {
     std.debug.print("{s}", .{Usage});
+    return err;
+}
+
+fn stageError(stage: []const u8, err: anyerror) anyerror {
+    std.debug.print("AgCAAD failed during {s}: {s}\n", .{ stage, @errorName(err) });
     return err;
 }
 
@@ -93,8 +101,16 @@ fn ensureOutputLayout(io: std.Io, output_root: []const u8) !void {
 
 test {
     _ = @import("io/delimited_reader.zig");
+    _ = @import("io/parse.zig");
     _ = @import("climate/growing_season.zig");
+    _ = @import("climate/precip_suitability.zig");
     _ = @import("climate/temperature_suitability.zig");
+    _ = @import("climate/winter_cold.zig");
+    _ = @import("core/array_store.zig");
+    _ = @import("core/math.zig");
+    _ = @import("core/packed_key.zig");
+    _ = @import("core/parallel.zig");
     _ = @import("soil/drainage.zig");
     _ = @import("soil/ph.zig");
+    _ = @import("suitability/final_rating.zig");
 }

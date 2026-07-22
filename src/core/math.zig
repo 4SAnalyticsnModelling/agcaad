@@ -8,6 +8,8 @@ pub fn roundToTwoDecimals(value: f32) f32 {
     return @round(value * 100.0) / 100.0;
 }
 
-pub fn roundToNearestInteger(value: f32) i32 {
-    return @intFromFloat(@round(value));
+test "rounding helpers handle positive and negative values" {
+    try std.testing.expectEqual(@as(f32, 1.3), roundToOneDecimal(1.25));
+    try std.testing.expectEqual(@as(f32, -1.3), roundToOneDecimal(-1.25));
+    try std.testing.expectEqual(@as(f32, 1.24), roundToTwoDecimals(1.235));
 }
