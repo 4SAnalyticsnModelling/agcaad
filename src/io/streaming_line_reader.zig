@@ -80,6 +80,28 @@ pub const Reader = struct {
         return error.MissingCell;
     }
 
+    pub fn projectCells(self: Reader, comptime count: usize, line: []const u8, target_column_indexes: [count]usize) ![count][]const u8 {
+        var result: [count][]const u8 = undefined;
+        var found: [count]bool = @splat(false);
+        var found_count: usize = 0;
+        var column_index: usize = 0;
+        var split = std.mem.splitScalar(u8, line, self.delimiter);
+        while (split.next()) |cell_text| : (column_index += 1) {
+            inline for (target_column_indexes, 0..) |target_column_index, target_index| {
+                if (!found[target_index] and column_index == target_column_index) {
+                    result[target_index] = trimCell(cell_text);
+                    found[target_index] = true;
+                    found_count += 1;
+                }
+            }
+            if (found_count == count) return result;
+        }
+        inline for (found, 0..) |was_found, target_index| {
+            if (!was_found) std.debug.print("Missing cell in '{s}' at row {d}, column index {d}\n", .{ self.path, self.row_number, target_column_indexes[target_index] });
+        }
+        return error.MissingCell;
+    }
+
     pub fn intCell(self: Reader, comptime T: type, line: []const u8, target_column_index: usize, column_name: []const u8) !T {
         return @import("parse.zig").integer(T, self.path, self.row_number, column_name, try self.cell(line, target_column_index));
     }

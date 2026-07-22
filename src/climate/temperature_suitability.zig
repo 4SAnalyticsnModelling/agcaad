@@ -22,13 +22,13 @@ const ScoreAccumulator = struct {
     score_count: u64 = 0,
 };
 
-const Result = struct { crop_name_id: u32, township_id: u32, temperature_score: f32 };
-
 const CropDayMasks = struct {
     allocator: std.mem.Allocator,
     word_count: usize,
     words: std.ArrayList(u64) = .empty,
     offset_by_township_day: std.AutoHashMap(u64, usize),
+    township_ids: std.ArrayList(u32) = .empty,
+    township_index_by_id: std.AutoHashMap(u32, usize),
 
     fn init(allocator: std.mem.Allocator, crop_count: usize) !CropDayMasks {
         const padded_count = std.math.add(usize, crop_count, 63) catch return error.InputTooLarge;
@@ -36,12 +36,15 @@ const CropDayMasks = struct {
             .allocator = allocator,
             .word_count = padded_count / 64,
             .offset_by_township_day = std.AutoHashMap(u64, usize).init(allocator),
+            .township_index_by_id = std.AutoHashMap(u32, usize).init(allocator),
         };
     }
 
     fn deinit(self: *CropDayMasks) void {
         self.words.deinit(self.allocator);
         self.offset_by_township_day.deinit();
+        self.township_ids.deinit(self.allocator);
+        self.township_index_by_id.deinit();
     }
 
     fn getOrCreate(self: *CropDayMasks, key: u64) ![]u64 {
@@ -56,6 +59,40 @@ const CropDayMasks = struct {
     fn get(self: CropDayMasks, key: u64) ?[]const u64 {
         const offset = self.offset_by_township_day.get(key) orelse return null;
         return self.words.items[offset..][0..self.word_count];
+    }
+
+    fn ensureTownship(self: *CropDayMasks, township_id: u32) !usize {
+        const entry = try self.township_index_by_id.getOrPut(township_id);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = self.township_ids.items.len;
+            try self.township_ids.append(self.allocator, township_id);
+        }
+        return entry.value_ptr.*;
+    }
+
+    fn townshipIndex(self: CropDayMasks, township_id: u32) ?usize {
+        return self.township_index_by_id.get(township_id);
+    }
+};
+
+const ScoreGrid = struct {
+    allocator: std.mem.Allocator,
+    township_count: usize,
+    values: []ScoreAccumulator,
+
+    fn init(allocator: std.mem.Allocator, crop_count: usize, township_count: usize) !ScoreGrid {
+        const value_count = std.math.mul(usize, crop_count, township_count) catch return error.InputTooLarge;
+        const values = try allocator.alloc(ScoreAccumulator, value_count);
+        @memset(values, .{});
+        return .{ .allocator = allocator, .township_count = township_count, .values = values };
+    }
+
+    fn deinit(self: ScoreGrid) void {
+        self.allocator.free(self.values);
+    }
+
+    fn get(self: ScoreGrid, crop_index: usize, township_index: usize) *ScoreAccumulator {
+        return &self.values[crop_index * self.township_count + township_index];
     }
 };
 
@@ -97,10 +134,10 @@ pub fn runWithPaths(
     defer crop_mask_by_township_day.deinit();
     try loadCropDayMasks(allocator, io, &strings, crops, &crop_mask_by_township_day, daily_path);
 
-    var score_by_crop_township = std.AutoHashMap(u64, ScoreAccumulator).init(allocator);
-    defer score_by_crop_township.deinit();
-    try streamHourlyScores(allocator, io, &strings, crops, crop_mask_by_township_day, &score_by_crop_township, hourly_path);
-    try writeTemperatureScores(allocator, io, strings, score_by_crop_township, output_path);
+    var scores = try ScoreGrid.init(allocator, crops.len, crop_mask_by_township_day.township_ids.items.len);
+    defer scores.deinit();
+    try streamHourlyScores(allocator, io, &strings, crops, crop_mask_by_township_day, scores, hourly_path);
+    try writeTemperatureScores(allocator, io, strings, crops, crop_mask_by_township_day.township_ids.items, scores, output_path);
 }
 
 pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_root_path: []const u8, final_scores: *final_rating.Accumulator) !void {
@@ -127,21 +164,17 @@ pub fn addToFinalAccumulator(allocator: std.mem.Allocator, io: std.Io, input_roo
     defer crop_mask_by_township_day.deinit();
     try loadCropDayMasks(allocator, io, &strings, crops, &crop_mask_by_township_day, daily_path);
 
-    var score_by_crop_township = std.AutoHashMap(u64, ScoreAccumulator).init(allocator);
-    defer score_by_crop_township.deinit();
-    try streamHourlyScores(allocator, io, &strings, crops, crop_mask_by_township_day, &score_by_crop_township, hourly_path);
+    var scores = try ScoreGrid.init(allocator, crops.len, crop_mask_by_township_day.township_ids.items.len);
+    defer scores.deinit();
+    try streamHourlyScores(allocator, io, &strings, crops, crop_mask_by_township_day, scores, hourly_path);
 
-    var it = score_by_crop_township.iterator();
-    while (it.next()) |entry| {
-        if (entry.value_ptr.score_count == 0) continue;
-        const ids = unpackCropTownship(entry.key_ptr.*);
-        const mean_score = entry.value_ptr.score_sum / @as(f64, @floatFromInt(entry.value_ptr.score_count));
-        try final_scores.addScore(
-            strings.get(ids.crop_name_id),
-            strings.get(ids.township_id),
-            .temperature,
-            math.roundToOneDecimal(@floatCast(mean_score)),
-        );
+    for (crops, 0..) |crop, crop_index| {
+        for (crop_mask_by_township_day.township_ids.items, 0..) |township_id, township_index| {
+            const score = scores.get(crop_index, township_index);
+            if (score.score_count == 0) continue;
+            const mean_score = score.score_sum / @as(f64, @floatFromInt(score.score_count));
+            try final_scores.addScore(strings.get(crop.crop_name_id), strings.get(township_id), .temperature, math.roundToOneDecimal(@floatCast(mean_score)));
+        }
     }
 }
 
@@ -195,16 +228,22 @@ fn loadCropDayMasks(
     defer allocator.free(started);
     @memset(started, false);
     var previous_township_id: ?u32 = null;
+    const parse = @import("../io/parse.zig");
 
     while (try reader.nextLine()) |line| {
-        const township_id = try strings.intern(try reader.cell(line, township_i));
+        const fields = try reader.projectCells(4, line, .{ township_i, jd_i, max_i, min_i });
+        const township_id = if (previous_township_id) |previous_id|
+            if (std.mem.eql(u8, fields[0], strings.get(previous_id))) previous_id else try strings.intern(fields[0])
+        else
+            try strings.intern(fields[0]);
         if (previous_township_id == null or previous_township_id.? != township_id) {
             @memset(started, false);
             previous_township_id = township_id;
+            _ = try crop_mask_by_township_day.ensureTownship(township_id);
         }
-        const julian_day = try reader.intCell(u32, line, jd_i, "julian_day");
-        const maximum_temperature = try reader.floatCell(f32, line, max_i, "maximum_temperature_quantile_75_celsius");
-        const minimum_temperature = try reader.floatCell(f32, line, min_i, "minimum_temperature_quantile_25_celsius");
+        const julian_day = try parse.integer(u32, path, reader.row_number, "julian_day", fields[1]);
+        const maximum_temperature = try parse.float(f32, path, reader.row_number, "maximum_temperature_quantile_75_celsius", fields[2]);
+        const minimum_temperature = try parse.float(f32, path, reader.row_number, "minimum_temperature_quantile_25_celsius", fields[3]);
         for (crops, 0..) |crop, crop_index| {
             if (crop.is_winter_annual or
                 (maximum_temperature > crop.absolute_minimum_temperature and minimum_temperature > 0))
@@ -225,7 +264,7 @@ fn streamHourlyScores(
     strings: *array_store.StringInterner,
     crops: []const CropTemperature,
     crop_mask_by_township_day: CropDayMasks,
-    score_by_crop_township: *std.AutoHashMap(u64, ScoreAccumulator),
+    scores: ScoreGrid,
     hourly_path: []const u8,
 ) !void {
     var reader = try stream_reader_mod.Reader.open(allocator, io, hourly_path);
@@ -233,25 +272,51 @@ fn streamHourlyScores(
     const township_i = try reader.columnIndex("township_id");
     const jd_i = try reader.columnIndex("julian_day");
     const temp_i = try reader.columnIndex("hourly_temperature_celsius");
+    const parse = @import("../io/parse.zig");
+    var previous_township_id: ?u32 = null;
+    var previous_township_index: usize = undefined;
 
     while (try reader.nextLine()) |line| {
-        const township_id = try strings.intern(try reader.cell(line, township_i));
-        const julian_day = try reader.intCell(u32, line, jd_i, "julian_day");
+        const fields = try reader.projectCells(3, line, .{ township_i, jd_i, temp_i });
+        var township_id: u32 = undefined;
+        var township_index: usize = undefined;
+        if (previous_township_id) |previous_id| {
+            if (std.mem.eql(u8, fields[0], strings.get(previous_id))) {
+                township_id = previous_id;
+                township_index = previous_township_index;
+            } else {
+                township_id = try strings.intern(fields[0]);
+                township_index = crop_mask_by_township_day.townshipIndex(township_id) orelse {
+                    std.debug.print("Hourly temperature township '{s}' in '{s}' at row {d} has no daily-temperature record\n", .{ fields[0], hourly_path, reader.row_number });
+                    return error.MissingDailyTemperature;
+                };
+                previous_township_id = township_id;
+                previous_township_index = township_index;
+            }
+        } else {
+            township_id = try strings.intern(fields[0]);
+            township_index = crop_mask_by_township_day.townshipIndex(township_id) orelse {
+                std.debug.print("Hourly temperature township '{s}' in '{s}' at row {d} has no daily-temperature record\n", .{ fields[0], hourly_path, reader.row_number });
+                return error.MissingDailyTemperature;
+            };
+            previous_township_id = township_id;
+            previous_township_index = township_index;
+        }
+        const julian_day = try parse.integer(u32, hourly_path, reader.row_number, "julian_day", fields[1]);
         const crop_mask = crop_mask_by_township_day.get(packTownshipDay(township_id, julian_day)) orelse continue;
-        const hourly_temperature = try reader.floatCell(f32, line, temp_i, "hourly_temperature_celsius");
+        const hourly_temperature = try parse.float(f32, hourly_path, reader.row_number, "hourly_temperature_celsius", fields[2]);
 
         for (crop_mask, 0..) |mask_word, word_index| {
             var remaining_mask = mask_word;
             while (remaining_mask != 0) {
                 const bit_index: u6 = @intCast(@ctz(remaining_mask));
                 remaining_mask &= remaining_mask - 1;
-                const crop = crops[word_index * 64 + bit_index];
+                const crop_index = word_index * 64 + bit_index;
+                const crop = crops[crop_index];
                 const score = hourlyTemperatureScore(hourly_temperature, crop);
-                const key = packCropTownship(crop.crop_name_id, township_id);
-                const entry = try score_by_crop_township.getOrPut(key);
-                if (!entry.found_existing) entry.value_ptr.* = .{};
-                entry.value_ptr.score_sum += @floatFromInt(score);
-                entry.value_ptr.score_count += 1;
+                const accumulator = scores.get(crop_index, township_index);
+                accumulator.score_sum += @floatFromInt(score);
+                accumulator.score_count += 1;
             }
         }
     }
@@ -269,48 +334,27 @@ fn writeTemperatureScores(
     allocator: std.mem.Allocator,
     io: std.Io,
     strings: array_store.StringInterner,
-    score_by_crop_township: std.AutoHashMap(u64, ScoreAccumulator),
+    crops: []const CropTemperature,
+    township_ids: []const u32,
+    scores: ScoreGrid,
     output_path: []const u8,
 ) !void {
-    var rows: std.ArrayList(Result) = .empty;
-    defer rows.deinit(allocator);
-    var it = score_by_crop_township.iterator();
-    while (it.next()) |entry| {
-        if (entry.value_ptr.score_count == 0) continue;
-        const ids = unpackCropTownship(entry.key_ptr.*);
-        const mean_score = entry.value_ptr.score_sum / @as(f64, @floatFromInt(entry.value_ptr.score_count));
-        try rows.append(allocator, .{
-            .crop_name_id = ids.crop_name_id,
-            .township_id = ids.township_id,
-            .temperature_score = math.roundToOneDecimal(@floatCast(mean_score)),
-        });
-    }
-    std.mem.sort(Result, rows.items, {}, sortRows);
     var output = try writer_mod.Writer.create(allocator, io, output_path);
     defer output.close();
     try output.writeAll("crop_common_name\ttownship_id\ttemperature_suitability_score\n");
-    for (rows.items) |row| {
-        try output.print("{s}\t{s}\t{d:.1}\n", .{ strings.get(row.crop_name_id), strings.get(row.township_id), row.temperature_score });
+    for (crops, 0..) |crop, crop_index| {
+        for (township_ids, 0..) |township_id, township_index| {
+            const score = scores.get(crop_index, township_index);
+            if (score.score_count == 0) continue;
+            const mean_score = score.score_sum / @as(f64, @floatFromInt(score.score_count));
+            try output.print("{s}\t{s}\t{d:.1}\n", .{ strings.get(crop.crop_name_id), strings.get(township_id), math.roundToOneDecimal(@floatCast(mean_score)) });
+        }
     }
     try output.flush();
 }
 
 fn packTownshipDay(township_id: u32, julian_day: u32) u64 {
     return packed_key.pack(township_id, julian_day);
-}
-
-fn packCropTownship(crop_name_id: u32, township_id: u32) u64 {
-    return packed_key.pack(crop_name_id, township_id);
-}
-
-fn unpackCropTownship(value: u64) struct { crop_name_id: u32, township_id: u32 } {
-    const unpacked = packed_key.unpack(value);
-    return .{ .crop_name_id = unpacked.first, .township_id = unpacked.second };
-}
-
-fn sortRows(_: void, a: Result, b: Result) bool {
-    if (a.crop_name_id == b.crop_name_id) return a.township_id < b.township_id;
-    return a.crop_name_id < b.crop_name_id;
 }
 
 test "example-derived onion hourly temperature scoring" {
@@ -326,4 +370,26 @@ test "example-derived onion hourly temperature scoring" {
     try std.testing.expectEqual(@as(i32, 3), hourlyTemperatureScore(10, onion));
     try std.testing.expectEqual(@as(i32, 4), hourlyTemperatureScore(20, onion));
     try std.testing.expectEqual(@as(i32, 0), hourlyTemperatureScore(30, onion));
+}
+
+test "dense score grid and township mask indexes remain independent" {
+    const allocator = std.testing.allocator;
+    var grid = try ScoreGrid.init(allocator, 2, 3);
+    defer grid.deinit();
+    grid.get(0, 2).score_sum = 4;
+    grid.get(0, 2).score_count = 1;
+    grid.get(1, 0).score_sum = 3;
+    grid.get(1, 0).score_count = 1;
+    try std.testing.expectEqual(@as(f64, 4), grid.get(0, 2).score_sum);
+    try std.testing.expectEqual(@as(f64, 3), grid.get(1, 0).score_sum);
+    try std.testing.expectEqual(@as(u64, 0), grid.get(0, 0).score_count);
+
+    var masks = try CropDayMasks.init(allocator, 140);
+    defer masks.deinit();
+    try std.testing.expectEqual(@as(usize, 0), try masks.ensureTownship(42));
+    try std.testing.expectEqual(@as(usize, 0), try masks.ensureTownship(42));
+    try std.testing.expectEqual(@as(usize, 1), try masks.ensureTownship(99));
+    const mask = try masks.getOrCreate(packTownshipDay(42, 120));
+    mask[2] = 1;
+    try std.testing.expectEqual(@as(u64, 1), masks.get(packTownshipDay(42, 120)).?[2]);
 }
