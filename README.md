@@ -163,7 +163,7 @@ zig build
 Build optimized binaries for all supported platforms:
 
 ```powershell
-$targets = @('x86_64-windows','aarch64-windows','x86_64-linux','aarch64-linux','x86_64-macos','aarch64-macos')
+$targets = @('agcaad-x86_64-windows','agcaad-aarch64-windows','agcaad-x86_64-linux','agcaad-aarch64-linux','agcaad-x86_64-macos','agcaad-aarch64-macos')
 foreach ($target in $targets) {
     zig build "-Dtarget=$target" -Doptimize=ReleaseFast -p "dst\$target"
 }
