@@ -2,12 +2,14 @@
 zig-out/
 dst/
 examples/agcaad_historical_weather_1981_2010/output/
-
+.*
+.verify*
 *.pdb
 *.exe
 *.dll
 *.so
 *.dylib
-
+examples
+*.zip
 *.tmp
 *.log

@@ -30,18 +30,18 @@ AgCAAD distributes computations across township grids and crops. The optional `-
 
 Prebuilt binaries are available from the [`v1.2.0` release](https://github.com/4SAnalyticsnModelling/agcaad/releases/tag/v1.2.0).
 
-The example input dataset is available separately as [`examples.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/examples.zip).
+The example input dataset is available separately as [`agcaad-examples.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/agcaad-examples.zip).
 
 Choose the archive for your operating system and CPU:
 
 | Operating system | CPU | Download |
 | --- | --- | --- |
-| Windows | Intel/AMD 64-bit | [`x86_64-windows.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/x86_64-windows.zip) |
-| Windows | ARM64 | [`aarch64-windows.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/aarch64-windows.zip) |
-| Linux | Intel/AMD 64-bit | [`x86_64-linux.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/x86_64-linux.zip) |
-| Linux | ARM64 | [`aarch64-linux.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/aarch64-linux.zip) |
-| macOS | Intel 64-bit | [`x86_64-macos.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/x86_64-macos.zip) |
-| macOS | Apple Silicon | [`aarch64-macos.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/aarch64-macos.zip) |
+| Windows | Intel/AMD 64-bit | [`agcaad-x86_64-windows.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/agcaad-x86_64-windows.zip) |
+| Windows | ARM64 | [`agcaad-aarch64-windows.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/agcaad-aarch64-windows.zip) |
+| Linux | Intel/AMD 64-bit | [`agcaad-x86_64-linux.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/agcaad-x86_64-linux.zip) |
+| Linux | ARM64 | [`agcaad-aarch64-linux.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/agcaad-aarch64-linux.zip) |
+| macOS | Intel 64-bit | [`agcaad-x86_64-macos.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/agcaad-x86_64-macos.zip) |
+| macOS | Apple Silicon | [`agcaad-aarch64-macos.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/agcaad-aarch64-macos.zip) |
 
 ## Run With A Binary
 
@@ -67,7 +67,7 @@ If `--threads` is omitted, the model runs with one worker thread. For example:
 .\agcaad.exe --input <input-root> --output <output-root>
 ```
 
-Windows example after downloading and extracting `examples.zip`:
+Windows example after downloading and extracting `agcaad-examples.zip`:
 
 ```powershell
 .\agcaad.exe --input "examples\agcaad_historical_weather_1981_2010\input" --output "examples\agcaad_historical_weather_1981_2010\output" --threads auto
@@ -82,20 +82,19 @@ crop_suitability_rankings_and_overall_ratings.txt
 
 ## Input Files
 
-After extracting [`examples.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/examples.zip), the example dataset has this layout:
+After extracting [`agcaad-examples.zip`](https://github.com/4SAnalyticsnModelling/agcaad/releases/download/v1.2.0/agcaad-examples.zip), the example dataset has this layout:
 
 ```text
-examples/
-  agcaad_historical_weather_1981_2010/
-    input/
-      crop_suitability_requirements.txt
-      historical_annual_precipitation_normals_by_township.txt
-      historical_daily_temperature_normals_by_township.txt
-      historical_hourly_temperature_by_township_day_hour.txt
-      historical_winter_critical_temperature_by_township.txt
-      soil_component_properties_by_township.txt
-      soil_drainage_requirement_scores.txt
-      soil_texture_requirement_scores.txt
+agcaad_historical_weather_1981_2010/
+  input/
+    crop_suitability_requirements.txt
+    historical_annual_precipitation_normals_by_township.txt
+    historical_daily_temperature_normals_by_township.txt
+    historical_hourly_temperature_by_township_day_hour.txt
+    historical_winter_critical_temperature_by_township.txt
+    soil_component_properties_by_township.txt
+    soil_drainage_requirement_scores.txt
+    soil_texture_requirement_scores.txt
 ```
 
 Temperature-suitability growing days are calculated for all crops from the daily temperature normals; no precomputed crop-day files are required. Input folders should contain only the input `.txt` files. Nested input folders are not used.
